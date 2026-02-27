@@ -4,6 +4,20 @@ import numpy as np
 import chess
 import torch
 
+"""
+encoding is basically when i look into a board i can understand it
+quueen king pawn etc. but when a NN looks at it just is meaningless.
+
+
+it only understand numbers,vectors and tensors so i have to translate the board into a numeric rep.
+so now it is 12 * 8 * 8 tensor 
+
+12 for type of pieces for black and white
+and 8 * 8 represents the board
+"""
+
+
+
 # ordered from 0-11 (first half is white second half is black)
 PIECE_TO_PLANE = {
     chess.PAWN: 0,
@@ -20,7 +34,7 @@ def board_to_tensor(board: chess.Board, *, dtype=torch.float32) -> torch.Tensor:
     Encoding a python-chess Board into a (12, 8, 8) tensor.
 
     Basically:
-    Rank 8 at row 0, rank 1 at row 7 (like a typical chess diagram).
+    Rank 8 at row 0, rank 1 at row 7.
     - File 'a' at col 0, file 'h' at col 7.
     - 1.0 indicates presence of a piece.
     """
