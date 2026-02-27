@@ -197,7 +197,7 @@ class TrainConfig:
         global_step = 0
 
 
-        #training loop
+        #training loop/phase
 
         for epoch in range(1, cfg.epochs + 1):
 
@@ -233,6 +233,48 @@ class TrainConfig:
                 epoch_acc1 += acc1
 
                 global_step += 1
+
+            #validation phase
+
+
+            model.eval()
+
+            val_loss = 0.0
+            val_acc1 = 0.0
+            n_batches = 0
+
+            with torch.no_grad():  # disables gradient tracking
+                for x, y in val_loader:
+                    x = x.to(device)
+                    y = y.to(device)
+
+                    logits = model(x)
+                    loss = criterion(logits, y)
+
+                    val_loss += loss.item()
+                    val_acc1 += accuracy_top1(logits, y)
+                    n_batches += 1
+
+            val_loss /= max(n_batches, 1)
+            val_acc1 /= max(n_batches, 1)
+
+            print(
+                f"[Epoch {epoch}] "
+                f"Train Loss: {epoch_loss/len(train_loader):.4f} "
+                f"Train Acc: {epoch_acc1/len(train_loader):.3f} | "
+                f"Val Loss: {val_loss:.4f} "
+                f"Val Acc: {val_acc1:.3f}"
+            )
+
+            # Save checkpoint after each epoch
+            torch.save(
+                model.state_dict(),
+                os.path.join(cfg.checkpoints_dir, f"{run_name}_epoch{epoch}.pt"),
+            )
+
+        writer.close()
+        print("Training complete.")
+
 
 
 
