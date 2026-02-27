@@ -55,10 +55,10 @@ class TrainConfig:
 
 
     def set_seed(seed: int):
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
 
 
     @torch.no_grad()
@@ -197,11 +197,42 @@ class TrainConfig:
         global_step = 0
 
 
+        #training loop
 
-        
+        for epoch in range(1, cfg.epochs + 1):
 
+        #Switch model to training mode
+            model.train()
 
+            epoch_loss = 0.0
+            epoch_acc1 = 0.0
 
+            for step, (x, y) in enumerate(train_loader, start=1):
+
+                # Move data to gpu
+                x = x.to(device)
+                y = y.to(device)
+
+                #forwardpass
+
+                #predicts
+                logits = model(x)
+
+                #calculate loss
+                loss = criterion(logits, y)
+
+                #Backwardpass
+                optimizer.zero_grad()
+                loss.backward()      #compute gradients
+                optimizer.step()     #update weights
+
+                #Track metrics
+                acc1 = accuracy_top1(logits, y)
+
+                epoch_loss += loss.item()
+                epoch_acc1 += acc1
+
+                global_step += 1
 
 
 
