@@ -31,11 +31,14 @@ class MoveVocab:
         min_freq: int = 1,
         verbose: bool = True,
         
+        
         #this ones are for fast iterative to see if it actually works.
         max_files: int | None = None,
         max_games_per_file: int | None = None,
         max_positions: int | None = 200_000,
         progress_every: int = 50_000,
+        
+    
     ) -> "MoveVocab":
         """
         Build a vocabulary from all PGN files in data_dir.

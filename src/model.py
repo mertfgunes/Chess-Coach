@@ -51,30 +51,30 @@ class PolicyCNN(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         #x expected shape: (B, 12, 8, 8)
         
-        # Conv block 1
+        #Conv block 1
         x = self.conv1(x)
         x = self.bn1(x)
         x = F.relu(x)
 
-        # Conv block 2
+        #Conv block 2
         x = self.conv2(x)
         x = self.bn2(x)
         x = F.relu(x)
 
-        # Conv block 3
+        #Conv block 3
         x = self.conv3(x)
         x = self.bn3(x)
         x = F.relu(x)
 
-        # Dropout
+        #Dropout
         x = self.dropout(x)
 
-        # Global Average Pool -> (B, C, 1, 1)
+        #Global Average Pool -> (B, C, 1, 1)
         x = self.global_pool(x)
 
-        # Flatten -> (B, C)
+        #Flatten -> (B, C)
         x = x.view(x.size(0), -1)
 
-        # Final logits -> (B, vocab_size)
+        #Final logits -> (B, vocab_size)
         logits = self.fc(x)
         return logits
