@@ -30,6 +30,12 @@ class MoveVocab:
         max_moves: int = 5000,
         min_freq: int = 1,
         verbose: bool = True,
+        
+        #this ones are for fast iterative to see if it actually works.
+        max_files: int | None = None,
+        max_games_per_file: int | None = None,
+        max_positions: int | None = 200_000,
+        progress_every: int = 50_000,
     ) -> "MoveVocab":
         """
         Build a vocabulary from all PGN files in data_dir.
@@ -42,11 +48,19 @@ class MoveVocab:
         loader = PGNLoader(data_dir=data_dir)
         counter = Counter()
 
-        #count moves by UCI from your PGNs
-        for _board, move in loader.generate_position_move_pairs():
-            # move is chess.Move
-            uci = move.uci()
-            counter[uci] += 1
+        seen = 0
+        for _board, move in loader.generate_position_move_pairs(
+            max_files=max_files,
+            max_games_per_file=max_games_per_file,
+            max_positions=max_positions,
+        ):
+            counter[move.uci()] += 1
+            seen += 1
+
+            if verbose and progress_every and seen % progress_every == 0:
+                print(f"[MoveVocab] Scanned {seen:,} positions... (unique moves so far: {len(counter):,})")
+
+
 
         #filter and take most common
         items = [(m, c) for (m, c) in counter.items() if c >= min_freq]
