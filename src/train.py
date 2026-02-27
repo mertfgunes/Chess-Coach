@@ -40,7 +40,7 @@ class TrainConfig:
     #Training
     batch_size: int = 64
     num_workers: int = 0
-    epochs: int = 5
+    epochs: int = 30
     lr: float = 1e-3
     weight_decay: float = 1e-4
 
@@ -246,7 +246,7 @@ def main():
         )
 
     writer.close()
-    print("Training complete.")
+    print("Training done.")
 
 
 if __name__ == "__main__":
