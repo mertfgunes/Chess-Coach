@@ -117,12 +117,16 @@ class TrainConfig:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("[Device]", device)
 
-        #1-Vocab
+        #1-Vocabulary
+
+        #the vocab maps moves to integer classlabel used by NN.
         vocab = load_or_build_vocab(cfg)
         vocab_size = len(vocab)
 
 
         #2-dataset
+
+        #read pgn, convert board to tensor, convert move to integer class.
         dataset = ChessDataset(
             vocab=vocab,
             data_dir=cfg.data_dir,
@@ -138,6 +142,8 @@ class TrainConfig:
 
 
         #3-train
+
+        #reserving a portion of the data(10% rn). to evulatue the general performance. 
         val_len = int(len(dataset) * cfg.val_ratio)
         train_len = len(dataset) - val_len
         train_ds, val_ds = random_split(dataset, [train_len, val_len], generator=torch.Generator().manual_seed(cfg.seed))
@@ -158,4 +164,52 @@ class TrainConfig:
         )
 
         print(f"[Split] train={len(train_ds):,} val={len(val_ds):,}")
+
+        #4-model
+
+        #this inits the CNN policy.
+        model = PolicyCNN(
+            vocab_size=vocab_size,
+            channels=cfg.channels,
+            dropout=cfg.dropout
+        ).to(device)
+
+
+        #5-crossentropyloss, internally applies the softmax. compares predicted class dist. to actaul class dist.. 
+
+        criterion = nn.CrossEntropyLoss()
+
+
+        #adamw => also learnt this week in the ML class. 
+        #adaptive gradient optimizer
+        #weight decay helps prevent overfitting
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=cfg.lr,
+            weight_decay=cfg.weight_decay,
+        )
+
+
+        #6-tensorboard implementation to track progress
+        run_name = time.strftime("chess_%Y%m%d_%H%M%S")
+        writer = SummaryWriter(log_dir=os.path.join(cfg.runs_dir, run_name))
+
+        global_step = 0
+
+
+
+        
+
+
+
+
+
+
+
+
+
+
+
+
+
 
