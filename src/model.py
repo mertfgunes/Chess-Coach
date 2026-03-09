@@ -33,7 +33,7 @@ class PolicyCNN(nn.Module):
         self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
 
         #final linear classifier to vocab_size move classes
-        self.fc = nn.Linear(channels, vocab_size)
+        self.fc = nn.Linear(channels + 6, vocab_size)
 
         #initialize weights a bit more sensibly than default
         self._init_weights()
@@ -48,7 +48,7 @@ class PolicyCNN(nn.Module):
                 nn.init.xavier_uniform_(m.weight)
                 nn.init.zeros_(m.bias)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, extras: torch.Tensor) -> torch.Tensor:
         #x expected shape: (B, 12, 8, 8)
         
         #Conv block 1
@@ -74,6 +74,9 @@ class PolicyCNN(nn.Module):
 
         #Flatten -> (B, C)
         x = x.view(x.size(0), -1)
+
+        #Concatenate extra board state features -> (B, C + 6)
+        x = torch.cat([x, extras], dim=1)
 
         #Final logits -> (B, vocab_size)
         logits = self.fc(x)
