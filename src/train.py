@@ -191,11 +191,12 @@ def main():
         epoch_acc1 = 0.0
         epoch_acc5 = 0.0
 
-        for step, (x, y) in enumerate(train_loader, start=1):
+        for step, (x, extras, y) in enumerate(train_loader, start=1):
             x = x.to(device)
+            extras = extras.to(device)
             y = y.to(device)
 
-            logits = model(x)
+            logits = model(x, extras)
             loss = criterion(logits, y)
 
             optimizer.zero_grad()
@@ -218,11 +219,12 @@ def main():
         n_batches = 0
 
         with torch.no_grad():
-            for x, y in val_loader:
+            for x, extras, y in val_loader:
                 x = x.to(device)
+                extras = extras.to(device)
                 y = y.to(device)
 
-                logits = model(x)
+                logits = model(x, extras)
                 loss = criterion(logits, y)
 
                 val_loss += loss.item()
