@@ -12,7 +12,7 @@ class PolicyCNN(nn.Module):
     def __init__(self, vocab_size: int, channels: int = 64, dropout: float = 0.1):
         super().__init__()
 
-        #channels controls model capacity. 64 is a good baseline for CPU/GPU.
+        #channels controls model capacity.
 
         self.conv1 = nn.Conv2d(in_channels=12, out_channels=channels, kernel_size=3, padding=1)
         self.bn1 = nn.BatchNorm2d(channels)

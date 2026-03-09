@@ -28,7 +28,7 @@ class TrainConfig:
     min_freq: int = 2
 
     #Dataset sampling
-    max_files: int | None = 1
+    max_files: int | None = 2
     max_games_per_file: int | None = 200
     max_positions: int | None = 50_000
 
@@ -40,7 +40,7 @@ class TrainConfig:
     #Training
     batch_size: int = 64
     num_workers: int = 0
-    epochs: int = 30
+    epochs: int = 15
     lr: float = 1e-3
     weight_decay: float = 1e-4
 
@@ -53,6 +53,7 @@ class TrainConfig:
 
     #Logging
     log_every_steps: int = 50
+
 
 def set_seed(seed: int):
     random.seed(seed)
@@ -177,6 +178,11 @@ def main():
     writer.add_text("debug", "training started", 0)
     writer.flush()
 
+    best_val_acc1 = float("-inf")
+    best_epoch = 0
+    best_model_path = os.path.join(cfg.checkpoints_dir, "best_model.pt")
+    last_model_path = os.path.join(cfg.checkpoints_dir, "last_model.pt")
+
     global_step = 0
 
     for epoch in range(1, cfg.epochs + 1):
@@ -233,19 +239,33 @@ def main():
             f"Val Acc: {val_acc1:.3f}"
         )
 
-        #TensorBoard scalars (so dashboards appear)
+        #tesnorboard scalars
         writer.add_scalar("train/loss", train_loss_avg, epoch)
         writer.add_scalar("train/acc_top1", train_acc_avg, epoch)
         writer.add_scalar("val/loss", val_loss, epoch)
         writer.add_scalar("val/acc_top1", val_acc1, epoch)
         writer.flush()
 
-        torch.save(
-            model.state_dict(),
-            os.path.join(cfg.checkpoints_dir, f"{run_name}_epoch{epoch}.pt"),
-        )
+        #always keeping the last recent model
+        torch.save(model.state_dict(), last_model_path)
+
+        #updating the best checkpoint only when validation improves
+        #so we always have the best epoch choosen. 
+
+        #in some cases sometimes (for example in the last run) the epoch 12 gave better result than 15.
+        if val_acc1 > best_val_acc1:
+            best_val_acc1 = val_acc1
+            best_epoch = epoch
+            torch.save(model.state_dict(), best_model_path)
+            print(
+                f"[Checkpoint] New best model saved to {best_model_path} "
+                f"(epoch={epoch}, val_acc={val_acc1:.3f})"
+            )
 
     writer.close()
+    print(f"Best epoch: {best_epoch} | Best val acc: {best_val_acc1:.3f}")
+    print(f"Best model: {best_model_path}")
+    print(f"Last model: {last_model_path}")
     print("Training done.")
 
 
