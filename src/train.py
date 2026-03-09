@@ -135,7 +135,7 @@ def main():
     train_ds, val_ds = random_split(
         dataset,
         [train_len, val_len],
-        generator=torch.Generator().manual_seed(cfg.seed)
+        generator=torch.Generator().manual_seed(cfg.seed),
     )
 
     train_loader = DataLoader(
@@ -159,10 +159,10 @@ def main():
     model = PolicyCNN(
         vocab_size=vocab_size,
         channels=cfg.channels,
-        dropout=cfg.dropout
+        dropout=cfg.dropout,
     ).to(device)
 
-    #5-loss + optimizer
+    #5-Loss + optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -189,6 +189,7 @@ def main():
         model.train()
         epoch_loss = 0.0
         epoch_acc1 = 0.0
+        epoch_acc5 = 0.0
 
         for step, (x, y) in enumerate(train_loader, start=1):
             x = x.to(device)
@@ -202,15 +203,18 @@ def main():
             optimizer.step()
 
             acc1 = accuracy_top1(logits, y)
+            acc5 = accuracy_topk(logits, y, k=5)
 
             epoch_loss += loss.item()
             epoch_acc1 += acc1
+            epoch_acc5 += acc5
             global_step += 1
 
         #validation
         model.eval()
         val_loss = 0.0
         val_acc1 = 0.0
+        val_acc5 = 0.0
         n_batches = 0
 
         with torch.no_grad():
@@ -223,27 +227,35 @@ def main():
 
                 val_loss += loss.item()
                 val_acc1 += accuracy_top1(logits, y)
+                val_acc5 += accuracy_topk(logits, y, k=5)
                 n_batches += 1
 
         val_loss /= max(n_batches, 1)
         val_acc1 /= max(n_batches, 1)
+        val_acc5 /= max(n_batches, 1)
 
         train_loss_avg = epoch_loss / len(train_loader)
-        train_acc_avg = epoch_acc1 / len(train_loader)
+        train_acc1_avg = epoch_acc1 / len(train_loader)
+        train_acc5_avg = epoch_acc5 / len(train_loader)
 
         print(
             f"[Epoch {epoch}] "
             f"Train Loss: {train_loss_avg:.4f} "
-            f"Train Acc: {train_acc_avg:.3f} | "
+            f"Train Acc@1: {train_acc1_avg:.3f} "
+            f"Train Acc@5: {train_acc5_avg:.3f} | "
             f"Val Loss: {val_loss:.4f} "
-            f"Val Acc: {val_acc1:.3f}"
+            f"Val Acc@1: {val_acc1:.3f} "
+            f"Val Acc@5: {val_acc5:.3f}"
         )
 
         #tesnorboard scalars
         writer.add_scalar("train/loss", train_loss_avg, epoch)
-        writer.add_scalar("train/acc_top1", train_acc_avg, epoch)
+        writer.add_scalar("train/acc_top1", train_acc1_avg, epoch)
+        writer.add_scalar("train/acc_top5", train_acc5_avg, epoch)
+
         writer.add_scalar("val/loss", val_loss, epoch)
         writer.add_scalar("val/acc_top1", val_acc1, epoch)
+        writer.add_scalar("val/acc_top5", val_acc5, epoch)
         writer.flush()
 
         #always keeping the last recent model
