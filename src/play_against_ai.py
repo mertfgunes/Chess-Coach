@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import random
+
 import torch
 import chess
 
@@ -11,6 +13,10 @@ from encoding import board_to_tensor
 MODEL_PATH = "checkpoints/best_model.pt"
 VOCAB_PATH = "data/move_vocab.txt"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# AI behavior settings
+TOP_K = 3          # consider the best K legal moves
+TEMPERATURE = 0.8  # lower = more deterministic, higher = more random
 
 
 def load_model():
@@ -26,35 +32,67 @@ def load_model():
 
 
 @torch.no_grad()
-def predict_legal_move(model: PolicyCNN, vocab: MoveVocab, board: chess.Board) -> chess.Move:
-    #predict the best legal move
-    #only moves that are legal is considered
-    #rest is just oignored
+def predict_legal_move(
+    model: PolicyCNN,
+    vocab: MoveVocab,
+    board: chess.Board,
+    top_k: int = TOP_K,
+    temperature: float = TEMPERATURE,
+) -> chess.Move:
+
+    
+    #Predict a legal move using legal move masking + top-k sampling.
+
+    #Run the model to get logits for all vocab moves
+    #Keep only legal moves known by the vocab
+    #Take the top-k legal moves
+    #Sample among them with temperature-scaled softmax
+
+    #This makes play less repetitive than always picking argmax.
+
+
     x = board_to_tensor(board).unsqueeze(0).to(DEVICE)  # (1, 12, 8, 8)
     logits = model(x).squeeze(0)  # (vocab_size,)
 
     legal_moves = list(board.legal_moves)
-
-    best_move = None
-    best_score = float("-inf")
+    scored_legal_moves: list[tuple[chess.Move, float]] = []
 
     for move in legal_moves:
         move_idx = vocab.encode(move)
 
-        #skip moves unknown to vocab
+        #skip unknown moves
         if move_idx == vocab.stoi[vocab.UNK]:
             continue
 
         score = logits[move_idx].item()
-        if score > best_score:
-            best_score = score
-            best_move = move
+        scored_legal_moves.append((move, score))
 
-    #fallback if all legal moves are UNK
-    if best_move is None:
-        best_move = legal_moves[0]
+    #fallback if all legal moves are unknown to vocab
+    if not scored_legal_moves:
+        return random.choice(legal_moves)
 
-    return best_move
+    #sort best to worst
+    scored_legal_moves.sort(key=lambda x: x[1], reverse=True)
+
+    #keep only top-k
+    k = max(1, min(top_k, len(scored_legal_moves)))
+    candidates = scored_legal_moves[:k]
+
+    #if top_k == 1, deterministic best move
+    if k == 1:
+        return candidates[0][0]
+
+    #temperature-scaled softmax over candidate scores
+    scores = torch.tensor([score for _, score in candidates], dtype=torch.float32)
+
+    #prevent divide-by-zero or weird values
+    temperature = max(temperature, 1e-6)
+
+    probs = torch.softmax(scores / temperature, dim=0).tolist()
+
+    moves = [move for move, _ in candidates]
+    chosen_move = random.choices(moves, weights=probs, k=1)[0]
+    return chosen_move
 
 
 def ask_user_color() -> chess.Color:
@@ -111,9 +149,9 @@ def main():
     board = chess.Board()
 
     human_color = ask_user_color()
-    ai_color = not human_color
 
     print("\nGame start.")
+    print(f"AI settings: TOP_K={TOP_K}, TEMPERATURE={TEMPERATURE}")
     print("Board:")
     print(board)
     print()
