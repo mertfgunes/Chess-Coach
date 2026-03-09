@@ -30,7 +30,7 @@ class TrainConfig:
     #Dataset sampling
     max_files: int | None = 2
     max_games_per_file: int | None = 200
-    max_positions: int | None = 50_000
+    max_positions: int | None = 100_000
 
     skip_unk: bool = True
 
@@ -45,7 +45,7 @@ class TrainConfig:
     weight_decay: float = 1e-4
 
     #Model
-    channels: int = 64
+    channels: int = 128
     dropout: float = 0.1
 
     #Reproducibility
