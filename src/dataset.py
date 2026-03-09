@@ -89,5 +89,5 @@ class ChessDataset(Dataset):
 
     def __getitem__(self, idx: int):
         x, extras, y = self.samples[idx]
-        # CrossEntropyLoss expects y as a LongTensor
+        #CrossEntropyLoss expects y as a LongTensor
         return x, extras, torch.tensor(y, dtype=torch.long)

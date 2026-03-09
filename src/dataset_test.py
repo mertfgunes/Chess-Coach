@@ -23,7 +23,8 @@ dataset = ChessDataset(
 
 loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
-X, y = next(iter(loader))
-print("Batch X:", X.shape)  #expected 32 12 8 8
-print("Batch y:", y.shape)  #expected 32
+X, extras, y = next(iter(loader))
+print("Batch X:", X.shape)          #expected 32 12 8 8
+print("Batch extras:", extras.shape) #expected 32 6
+print("Batch y:", y.shape)          #expected 32
 print("y min/max:", y.min().item(), y.max().item())
