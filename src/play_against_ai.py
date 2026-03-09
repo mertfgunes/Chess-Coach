@@ -15,7 +15,7 @@ VOCAB_PATH = "data/move_vocab.txt"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # AI behavior settings
-TOP_K = 3          # consider the best K legal moves
+TOP_K = 1          # consider the best K legal moves (it was 3 now made it 3 to see its best performance.)
 TEMPERATURE = 0.8  # lower = more deterministic, higher = more random
 
 

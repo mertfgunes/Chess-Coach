@@ -7,7 +7,7 @@ import torch
 from torch.utils.data import Dataset
 
 from pgn_loader import PGNLoader
-from encoding import board_to_tensor
+from encoding import board_to_tensor, board_extras
 from move_vocab import MoveVocab
 
 
@@ -22,6 +22,7 @@ class ChessDataset(Dataset):
     """
     Supervised dataset:
       X = encoded board tensor (12, 8, 8)
+      extras = extra board-state features (6,)
       y = move class id (int)
 
     This implementation preloads samples into memory for simplicity.
@@ -41,7 +42,7 @@ class ChessDataset(Dataset):
     ):
         self.vocab = vocab
         self.dtype = dtype
-        self.samples: List[Tuple[torch.Tensor, int]] = []
+        self.samples: List[Tuple[torch.Tensor, torch.Tensor, int]] = []
 
         loader = PGNLoader(data_dir=data_dir)
 
@@ -57,13 +58,15 @@ class ChessDataset(Dataset):
             total_seen += 1
             y = vocab.encode(move)
 
-            #UNK index is vocab.stoi["<UNK>"] which is defined as 1
+            # UNK index is vocab.stoi["<UNK>"] which is defined as 1
             if skip_unk and y == vocab.stoi[vocab.UNK]:
                 unk_skipped += 1
                 continue
 
             x = board_to_tensor(board, dtype=dtype)
-            self.samples.append((x, y))
+            extras = board_extras(board, dtype=dtype)
+
+            self.samples.append((x, extras, y))
             kept += 1
 
         self.stats = DatasetStats(
@@ -84,7 +87,7 @@ class ChessDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        x, y = self.samples[idx]
-        #crossEntropyLoss expects y as a LongTensor
-        return x, torch.tensor(y, dtype=torch.long)
+    def __getitem__(self, idx: int):
+        x, extras, y = self.samples[idx]
+        # CrossEntropyLoss expects y as a LongTensor
+        return x, extras, torch.tensor(y, dtype=torch.long)
