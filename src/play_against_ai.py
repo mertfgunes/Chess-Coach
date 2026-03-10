@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import random
 
-import torch
 import chess
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-from model import PolicyCNN
 from move_vocab import MoveVocab
 from encoding import board_to_tensor
 
@@ -14,15 +15,68 @@ MODEL_PATH = "checkpoints/best_model.pt"
 VOCAB_PATH = "data/move_vocab.txt"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# AI behavior settings
-TOP_K = 1          # consider the best K legal moves (it was 3 now made it 3 to see its best performance.)
-TEMPERATURE = 0.8  # lower = more deterministic, higher = more random
+#ai behaviour settings
+TOP_K = 1          #best K legal moves (it was 3 now made it 3 to see its best performance.)
+TEMPERATURE = 0.8  #lower = more deterministic, higher = more random
+MODEL_CHANNELS = 128
+MODEL_DROPOUT = 0.1
+
+
+class PolicyCNNLegacy(nn.Module):
+    """
+    Matches the checkpoint structure:
+    conv1/bn1, conv2/bn2, conv3/bn3, global_pool, dropout, fc
+    and fc input size = 128 (no extras concatenated).
+    """
+
+    def __init__(self, vocab_size: int, channels: int = 128, dropout: float = 0.1):
+        super().__init__()
+
+        self.conv1 = nn.Conv2d(in_channels=12, out_channels=channels, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(channels)
+
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn2 = nn.BatchNorm2d(channels)
+
+        self.conv3 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm2d(channels)
+
+        self.dropout = nn.Dropout(dropout)
+        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
+
+        # Important: checkpoint expects 128 here, not 134
+        self.fc = nn.Linear(channels, vocab_size)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.conv1(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+
+        x = self.conv2(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+
+        x = self.conv3(x)
+        x = self.bn3(x)
+        x = F.relu(x)
+
+        x = self.dropout(x)
+        x = self.global_pool(x)
+        x = x.view(x.size(0), -1)
+
+        logits = self.fc(x)
+        return logits
 
 
 def load_model():
     vocab = MoveVocab.load(VOCAB_PATH)
 
-    model = PolicyCNN(vocab_size=len(vocab))
+    model = PolicyCNNLegacy(
+        vocab_size=len(vocab),
+        channels=MODEL_CHANNELS,
+        dropout=MODEL_DROPOUT,
+    )
+
     state_dict = torch.load(MODEL_PATH, map_location=DEVICE)
     model.load_state_dict(state_dict)
     model.to(DEVICE)
@@ -33,35 +87,23 @@ def load_model():
 
 @torch.no_grad()
 def predict_legal_move(
-    model: PolicyCNN,
+    model: nn.Module,
     vocab: MoveVocab,
     board: chess.Board,
     top_k: int = TOP_K,
     temperature: float = TEMPERATURE,
 ) -> chess.Move:
-
-    
-    #Predict a legal move using legal move masking + top-k sampling.
-
-    #Run the model to get logits for all vocab moves
-    #Keep only legal moves known by the vocab
-    #Take the top-k legal moves
-    #Sample among them with temperature-scaled softmax
-
-    #This makes play less repetitive than always picking argmax.
-
-
-    x = board_to_tensor(board).unsqueeze(0).to(DEVICE)  # (1, 12, 8, 8)
-    logits = model(x).squeeze(0)  # (vocab_size,)
+    x = board_to_tensor(board).unsqueeze(0).to(DEVICE)
+    logits = model(x).squeeze(0)
 
     legal_moves = list(board.legal_moves)
     scored_legal_moves: list[tuple[chess.Move, float]] = []
 
+    unk_idx = vocab.stoi[vocab.UNK]
+
     for move in legal_moves:
         move_idx = vocab.encode(move)
-
-        #skip unknown moves
-        if move_idx == vocab.stoi[vocab.UNK]:
+        if move_idx == unk_idx:
             continue
 
         score = logits[move_idx].item()
@@ -78,21 +120,21 @@ def predict_legal_move(
     k = max(1, min(top_k, len(scored_legal_moves)))
     candidates = scored_legal_moves[:k]
 
+
     #if top_k == 1, deterministic best move
     if k == 1:
         return candidates[0][0]
 
+
     #temperature-scaled softmax over candidate scores
     scores = torch.tensor([score for _, score in candidates], dtype=torch.float32)
-
+    
     #prevent divide-by-zero or weird values
     temperature = max(temperature, 1e-6)
-
     probs = torch.softmax(scores / temperature, dim=0).tolist()
 
     moves = [move for move, _ in candidates]
-    chosen_move = random.choices(moves, weights=probs, k=1)[0]
-    return chosen_move
+    return random.choices(moves, weights=probs, k=1)[0]
 
 
 def ask_user_color() -> chess.Color:
