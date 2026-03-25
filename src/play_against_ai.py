@@ -21,6 +21,7 @@ TEMPERATURE = 0.8  #lower = more deterministic, higher = more random
 MODEL_CHANNELS = 128
 MODEL_DROPOUT = 0.1
 
+
 #implementing this because the AI can not understand the problem with taking the free pieces.
 PIECE_VALUES = {
     chess.PAWN: 1,
@@ -68,42 +69,84 @@ def load_model():
     return model, vocab
 
 
-def move_capture_score(board: chess.Board, move: chess.Move) -> float:
+def _captured_piece_type(board: chess.Board, move: chess.Move) -> int | None:
+    captured_piece = board.piece_at(move.to_square)
+
+    if captured_piece is not None:
+        return captured_piece.piece_type
+
+    if board.is_en_passant(move):
+        return chess.PAWN
+
+    return None
+
+
+def _is_move_safe_enough(board: chess.Board, move: chess.Move) -> bool:
     """
-    Scores a capture move using a simple tactical heuristic.
+    Plays the move on a copy of the board and checks whether the moved piece
+    sits on a square attacked by the opponent afterwards.
+    """
+    board_copy = board.copy(stack=False)
+    board_copy.push(move)
+
+    moved_piece = board_copy.piece_at(move.to_square)
+    if moved_piece is None:
+        return False
+
+    return not board_copy.is_attacked_by(board_copy.turn, move.to_square)
+
+
+def tactical_capture_score(board: chess.Board, move: chess.Move) -> float:
+    """
+    Scores capture moves with a stronger tactical heuristic.
     Higher is better.
     """
     if not board.is_capture(move):
         return float("-inf")
 
     attacker = board.piece_at(move.from_square)
-    captured = board.piece_at(move.to_square)
-
-    # En passant capture case
-    if captured is None and board.is_en_passant(move):
-        captured_value = PIECE_VALUES[chess.PAWN]
-    elif captured is not None:
-        captured_value = PIECE_VALUES.get(captured.piece_type, 0)
-    else:
+    if attacker is None:
         return float("-inf")
 
-    attacker_value = PIECE_VALUES.get(attacker.piece_type, 0) if attacker else 0
+    captured_type = _captured_piece_type(board, move)
+    if captured_type is None:
+        return float("-inf")
 
-    # Basic gain: prefer winning more valuable pieces with cheaper attackers
-    score = captured_value * 10 - attacker_value
+    attacker_value = PIECE_VALUES.get(attacker.piece_type, 0)
+    captured_value = PIECE_VALUES.get(captured_type, 0)
 
-    # Bonus for especially valuable captures
-    if captured_value >= 9:
-        score += 100
-    elif captured_value >= 5:
-        score += 30
+    safe_after_capture = _is_move_safe_enough(board, move)
+
+    score = 0.0
+
+    #base priority: winning bigger material is good
+    score += captured_value * 20
+
+    #prefer using lower-value attacker to take higher-value victim
+    score += (captured_value - attacker_value) * 8
+
+    #strong bonus for truly safe captures
+    if safe_after_capture:
+        score += 25
+    else:
+        #penalize unsafe captures, but still allow huge wins like free queen captures
+        score -= attacker_value * 6
+
+    #extra bonuses for high-value targets
+    if captured_type == chess.QUEEN:
+        score += 120
+    elif captured_type == chess.ROOK:
+        score += 50
+    elif captured_type in (chess.BISHOP, chess.KNIGHT):
+        score += 20
 
     return score
 
 
-def find_best_tactical_capture(board: chess.Board) -> chess.Move | None:
+def find_best_tactical_move(board: chess.Board) -> chess.Move | None:
     """
-    Returns a clearly strong capture if one exists, otherwise None.
+    Finds a clearly strong tactical capture if one exists.
+    Returns None if there is no obvious tactical override.
     """
     legal_moves = list(board.legal_moves)
     capture_moves = [move for move in legal_moves if board.is_capture(move)]
@@ -111,17 +154,18 @@ def find_best_tactical_capture(board: chess.Board) -> chess.Move | None:
     if not capture_moves:
         return None
 
-    scored = [(move, move_capture_score(board, move)) for move in capture_moves]
-    scored.sort(key=lambda x: x[1], reverse=True)
+    scored_moves = [(move, tactical_capture_score(board, move)) for move in capture_moves]
+    scored_moves.sort(key=lambda x: x[1], reverse=True)
 
-    best_move, best_score = scored[0]
+    best_move, best_score = scored_moves[0]
 
-    # Only override the model when the capture is clearly attractive.
-    # This threshold makes queen/rook/free-piece captures much more likely.
-    if best_score >= 20:
+    #only override the neural model if the tactic is clearly attractive.
+    #this is tuned to grab hanging queens/rooks much more reliably.
+    if best_score >= 35:
         return best_move
 
     return None
+
 
 @torch.no_grad()
 def predict_legal_move(
@@ -131,8 +175,8 @@ def predict_legal_move(
     top_k: int = TOP_K,
     temperature: float = TEMPERATURE,
 ) -> chess.Move:
-    # First: tactical override for obvious captures
-    tactical_move = find_best_tactical_capture(board)
+    #1st tactical override for obvious captures / hanging pieces
+    tactical_move = find_best_tactical_move(board)
     if tactical_move is not None:
         return tactical_move
 
@@ -178,6 +222,8 @@ def predict_legal_move(
 
     moves = [move for move, _ in candidates]
     return random.choices(moves, weights=probs, k=1)[0]
+
+
 def ask_user_color() -> chess.Color:
     while True:
         choice = input("Play as white or black? [w/b]: ").strip().lower()

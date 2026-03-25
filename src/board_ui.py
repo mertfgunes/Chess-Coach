@@ -326,13 +326,10 @@ class ChessUI:
         self.clear_selection()
         return True
 
-    #promotion options (not really working well but will debug this later)
-    def handle_promotion_click(self, mouse_pos: Tuple[int, int]):
-        box_w = 70
-        box_h = 70
-        gap = 10
-        panel_x = WINDOW_WIDTH // 2 - 160
-        panel_y = WINDOW_HEIGHT // 2 - 80
+    def get_promotion_option_rects(self) -> List[Tuple[int, pygame.Rect]]:
+        panel_w, panel_h = 340, 140
+        panel_x = WINDOW_WIDTH // 2 - panel_w // 2
+        panel_y = WINDOW_HEIGHT // 2 - panel_h // 2
 
         options = [
             chess.QUEEN,
@@ -341,14 +338,32 @@ class ChessUI:
             chess.KNIGHT,
         ]
 
+        box_w = 70
+        box_h = 70
+        gap = 10
+        start_x = panel_x + 15
+        y = panel_y + 50
+
+        rects: List[Tuple[int, pygame.Rect]] = []
         for i, piece_type in enumerate(options):
-            rect = pygame.Rect(panel_x + i * (box_w + gap), panel_y, box_w, box_h)
+            rect = pygame.Rect(start_x + i * (box_w + gap), y, box_w, box_h)
+            rects.append((piece_type, rect))
+
+        return rects
+
+    #promotion options (not really working well but will debug this later)
+    def handle_promotion_click(self, mouse_pos: Tuple[int, int]):
+        if self.awaiting_promotion_from is None or self.awaiting_promotion_to is None:
+            return
+
+        for piece_type, rect in self.get_promotion_option_rects():
             if rect.collidepoint(mouse_pos):
                 move = chess.Move(
                     self.awaiting_promotion_from,
                     self.awaiting_promotion_to,
                     promotion=piece_type,
                 )
+
                 if move in self.board.legal_moves:
                     print("DEBUG: promotion move pushed:", move.uci())
                     self.board.push(move)
@@ -360,6 +375,7 @@ class ChessUI:
                 self.awaiting_promotion_to = None
                 self.clear_selection()
                 return
+                    
     #events for controls.
     def handle_events(self):
         for event in pygame.event.get():
@@ -379,7 +395,7 @@ class ChessUI:
                     self.clear_selection()
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                mouse_pos = pygame.mouse.get_pos()
+                mouse_pos = event.pos
 
                 if self.white_button.collidepoint(mouse_pos):
                     self.choose_side(chess.WHITE)
@@ -611,8 +627,7 @@ class ChessUI:
 
         mouse_pos = pygame.mouse.get_pos()
 
-        for i, piece_type in enumerate(options):
-            rect = pygame.Rect(start_x + i * (box_w + gap), y, box_w, box_h)
+        for piece_type, rect in self.get_promotion_option_rects():
             color = BUTTON_HOVER if rect.collidepoint(mouse_pos) else BUTTON_COLOR
             pygame.draw.rect(self.screen, color, rect, border_radius=8)
             pygame.draw.rect(self.screen, ACCENT, rect, 2, border_radius=8)
