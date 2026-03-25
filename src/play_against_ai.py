@@ -5,10 +5,10 @@ import random
 import chess
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from move_vocab import MoveVocab
 from encoding import board_to_tensor
+from model import PolicyCNN
 
 
 MODEL_PATH = "checkpoints/best_model.pt"
@@ -22,64 +22,37 @@ MODEL_CHANNELS = 128
 MODEL_DROPOUT = 0.1
 
 
-class PolicyCNNLegacy(nn.Module):
-    """
-    Matches the checkpoint structure:
-    conv1/bn1, conv2/bn2, conv3/bn3, global_pool, dropout, fc
-    and fc input size = 128 (no extras concatenated).
-    """
-
-    def __init__(self, vocab_size: int, channels: int = 128, dropout: float = 0.1):
-        super().__init__()
-
-        self.conv1 = nn.Conv2d(in_channels=12, out_channels=channels, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(channels)
-
-        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
-        self.bn2 = nn.BatchNorm2d(channels)
-
-        self.conv3 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
-        self.bn3 = nn.BatchNorm2d(channels)
-
-        self.dropout = nn.Dropout(dropout)
-        self.global_pool = nn.AdaptiveAvgPool2d((1, 1))
-
-        # Important: checkpoint expects 128 here, not 134
-        self.fc = nn.Linear(channels, vocab_size)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = F.relu(x)
-
-        x = self.conv2(x)
-        x = self.bn2(x)
-        x = F.relu(x)
-
-        x = self.conv3(x)
-        x = self.bn3(x)
-        x = F.relu(x)
-
-        x = self.dropout(x)
-        x = self.global_pool(x)
-        x = x.view(x.size(0), -1)
-
-        logits = self.fc(x)
-        return logits
+def board_to_extras(board: chess.Board) -> torch.Tensor:
+    # These extra features must match training-time extras.
+    # 6 features are used here because your checkpoint shape shows 128 + 6 = 134.
+    extras = torch.tensor(
+        [
+            1.0 if board.turn == chess.WHITE else 0.0,
+            1.0 if board.has_kingside_castling_rights(chess.WHITE) else 0.0,
+            1.0 if board.has_queenside_castling_rights(chess.WHITE) else 0.0,
+            1.0 if board.has_kingside_castling_rights(chess.BLACK) else 0.0,
+            1.0 if board.has_queenside_castling_rights(chess.BLACK) else 0.0,
+            min(board.halfmove_clock, 100) / 100.0,
+        ],
+        dtype=torch.float32,
+    )
+    return extras
 
 
 def load_model():
-    vocab = MoveVocab.load(VOCAB_PATH)
+    model_path = "checkpoints/best_model.pt"
+    vocab_path = "data/move_vocab.txt"
 
-    model = PolicyCNNLegacy(
+    vocab = MoveVocab.load(vocab_path)
+
+    model = PolicyCNN(
         vocab_size=len(vocab),
         channels=MODEL_CHANNELS,
         dropout=MODEL_DROPOUT,
-    )
+    ).to(DEVICE)
 
-    state_dict = torch.load(MODEL_PATH, map_location=DEVICE)
+    state_dict = torch.load(model_path, map_location=DEVICE)
     model.load_state_dict(state_dict)
-    model.to(DEVICE)
     model.eval()
 
     return model, vocab
@@ -94,7 +67,9 @@ def predict_legal_move(
     temperature: float = TEMPERATURE,
 ) -> chess.Move:
     x = board_to_tensor(board).unsqueeze(0).to(DEVICE)
-    logits = model(x).squeeze(0)
+    extras = board_to_extras(board).unsqueeze(0).to(DEVICE)
+
+    logits = model(x, extras).squeeze(0)
 
     legal_moves = list(board.legal_moves)
     scored_legal_moves: list[tuple[chess.Move, float]] = []
@@ -120,15 +95,13 @@ def predict_legal_move(
     k = max(1, min(top_k, len(scored_legal_moves)))
     candidates = scored_legal_moves[:k]
 
-
     #if top_k == 1, deterministic best move
     if k == 1:
         return candidates[0][0]
 
-
     #temperature-scaled softmax over candidate scores
     scores = torch.tensor([score for _, score in candidates], dtype=torch.float32)
-    
+
     #prevent divide-by-zero or weird values
     temperature = max(temperature, 1e-6)
     probs = torch.softmax(scores / temperature, dim=0).tolist()
