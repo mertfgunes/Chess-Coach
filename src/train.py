@@ -24,13 +24,13 @@ class TrainConfig:
 
     # Vocab
     vocab_path: str = "data/move_vocab.txt"
-    max_moves: int = 10000
+    max_moves: int = 5000
     min_freq: int = 2
 
     # Dataset sampling
     max_files: int | None = None
     max_games_per_file: int | None = None
-    max_positions: int | None = 500_000
+    max_positions: int | None = 100_000
 
     skip_unk: bool = True
 
@@ -38,14 +38,14 @@ class TrainConfig:
     val_ratio: float = 0.1
 
     # Training
-    batch_size: int = 64
+    batch_size: int = 32
     num_workers: int = 0
-    epochs: int = 30
+    epochs: int = 10
     lr: float = 1e-3
     weight_decay: float = 1e-4
 
     # Model
-    channels: int = 256
+    channels: int = 128
     dropout: float = 0.1
 
     # Reproducibility
@@ -209,6 +209,15 @@ def main():
             epoch_acc1 += acc1
             epoch_acc5 += acc5
             global_step += 1
+
+            if step % cfg.log_every_steps == 0:
+                print(
+                    f"[Epoch {epoch}/{cfg.epochs}] "
+                    f"Step {step}/{len(train_loader)} "
+                    f"Loss: {loss.item():.4f} "
+                    f"Acc@1: {acc1:.3f} "
+                    f"Acc@5: {acc5:.3f}"
+                )
 
         #validation
         model.eval()
