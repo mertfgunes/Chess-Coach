@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import traceback
 from typing import Dict, List, Optional, Tuple
 
 import chess
@@ -36,7 +37,6 @@ BUTTON_HOVER = (95, 95, 95)
 
 ASSETS_DIR = "assets/pieces"
 
-
 #piece images that are in the assets.
 PIECE_IMAGE_NAMES = {
     "P": "whitepawn.png",
@@ -52,7 +52,6 @@ PIECE_IMAGE_NAMES = {
     "q": "blackqueen.png",
     "k": "blackking.png",
 }
-
 #not sure even if i need this anymore since ive images
 #but you know what they say.
 
@@ -120,15 +119,29 @@ class ChessUI:
     #make the move, predict the legal move etc
     def load_ai_once(self):
         try:
+            print("DEBUG: load_ai_once() called")
             self.model, self.vocab = load_model()
             self.model_loaded = True
             self.model_error = None
+            print("DEBUG: model loaded successfully")
+            print("DEBUG: vocab loaded =", self.vocab is not None)
         except Exception as e:
             self.model_loaded = False
             self.model_error = str(e)
+            print("ERROR in load_ai_once():", e)
+            traceback.print_exc()
 
     def make_ai_move(self):
-        if not self.model_loaded or self.ai_thinking or self.human_color is None:
+        if not self.model_loaded:
+            print("DEBUG: AI move skipped - model not loaded")
+            return
+
+        if self.ai_thinking:
+            print("DEBUG: AI move skipped - already thinking")
+            return
+
+        if self.human_color is None:
+            print("DEBUG: AI move skipped - human side not chosen yet")
             return
 
         self.ai_thinking = True
@@ -136,13 +149,36 @@ class ChessUI:
         pygame.display.flip()
 
         try:
+            print("DEBUG: make_ai_move() called")
+            print("DEBUG: board FEN =", self.board.fen())
+            print("DEBUG: turn =", "white" if self.board.turn == chess.WHITE else "black")
+            print("DEBUG: legal move count =", self.board.legal_moves.count())
+
             move = predict_legal_move(self.model, self.vocab, self.board)
-            if move in self.board.legal_moves:
+            print("DEBUG: predict_legal_move returned:", move)
+
+            if move is None:
+                self.model_error = "predict_legal_move returned None"
+                print("ERROR: predict_legal_move returned None")
+
+            elif not isinstance(move, chess.Move):
+                self.model_error = f"predict_legal_move returned non-chess.Move: {move}"
+                print("ERROR: move is not a chess.Move:", type(move), move)
+
+            elif move in self.board.legal_moves:
+                print("DEBUG: AI move is legal, pushing move:", move.uci())
                 self.board.push(move)
                 self.last_move = move
                 self.clear_selection()
+            else:
+                self.model_error = f"Illegal AI move returned: {move.uci()}"
+                print("ERROR: Illegal AI move returned:", move.uci())
+                print("DEBUG: legal moves are:", [m.uci() for m in self.board.legal_moves])
+
         except Exception as e:
             self.model_error = str(e)
+            print("ERROR in make_ai_move():", e)
+            traceback.print_exc()
 
         self.ai_thinking = False
 
@@ -158,10 +194,17 @@ class ChessUI:
         self.game_over_message = ""
 
     def choose_side(self, color: chess.Color):
+        print("DEBUG: choose_side() called with", "white" if color == chess.WHITE else "black")
         self.human_color = color
         self.ai_color = not color
         self.board_flipped = color == chess.BLACK
         self.reset_game()
+        print(
+            "DEBUG: side chosen | human =",
+            "white" if self.human_color == chess.WHITE else "black",
+            "| ai =",
+            "white" if self.ai_color == chess.WHITE else "black",
+        )
 
     def clear_selection(self):
         self.selected_square = None
@@ -202,7 +245,7 @@ class ChessUI:
 
         return chess.square(file, rank)
 
-    #board implementation for 8*8
+    #board implementation for 8*8    
     def square_to_screen(self, square: int) -> Tuple[int, int]:
         file = chess.square_file(square)
         rank = chess.square_rank(square)
@@ -218,10 +261,13 @@ class ChessUI:
     #user input is handled here
     def handle_board_click(self, mouse_pos: Tuple[int, int]):
         if self.human_color is None:
+            print("DEBUG: board click ignored - choose side first")
             return
         if self.board.turn != self.human_color:
+            print("DEBUG: board click ignored - not human turn")
             return
         if self.board.is_game_over():
+            print("DEBUG: board click ignored - game over")
             return
 
         clicked_square = self.screen_to_square(mouse_pos)
@@ -232,6 +278,7 @@ class ChessUI:
 
         if self.selected_square is not None:
             if self.try_make_human_move(self.selected_square, clicked_square):
+                print("DEBUG: human move made")
                 return
 
         if piece and piece.color == self.human_color:
@@ -241,6 +288,12 @@ class ChessUI:
                 for move in self.board.legal_moves
                 if move.from_square == clicked_square
             ]
+            print(
+                "DEBUG: selected square =",
+                chess.square_name(clicked_square),
+                "| legal targets =",
+                [chess.square_name(sq) for sq in self.legal_targets],
+            )
         else:
             self.clear_selection()
 
@@ -251,15 +304,23 @@ class ChessUI:
         ]
 
         if not legal_moves:
+            print(
+                "DEBUG: illegal human move attempt:",
+                chess.square_name(from_sq),
+                "->",
+                chess.square_name(to_sq),
+            )
             return False
 
         promotion_moves = [m for m in legal_moves if m.promotion is not None]
         if promotion_moves:
             self.awaiting_promotion_from = from_sq
             self.awaiting_promotion_to = to_sq
+            print("DEBUG: promotion pending")
             return True
 
         move = legal_moves[0]
+        print("DEBUG: human move pushed:", move.uci())
         self.board.push(move)
         self.last_move = move
         self.clear_selection()
@@ -289,14 +350,16 @@ class ChessUI:
                     promotion=piece_type,
                 )
                 if move in self.board.legal_moves:
+                    print("DEBUG: promotion move pushed:", move.uci())
                     self.board.push(move)
                     self.last_move = move
+                else:
+                    print("ERROR: promotion move not legal:", move.uci())
 
                 self.awaiting_promotion_from = None
                 self.awaiting_promotion_to = None
                 self.clear_selection()
                 return
-
     #events for controls.
     def handle_events(self):
         for event in pygame.event.get():
@@ -306,10 +369,13 @@ class ChessUI:
 
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
+                    print("DEBUG: restart key pressed")
                     self.reset_game()
                 elif event.key == pygame.K_f:
+                    print("DEBUG: flip key pressed")
                     self.board_flipped = not self.board_flipped
                 elif event.key == pygame.K_ESCAPE:
+                    print("DEBUG: clear selection")
                     self.clear_selection()
 
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -324,10 +390,12 @@ class ChessUI:
                     continue
 
                 if self.restart_button.collidepoint(mouse_pos):
+                    print("DEBUG: restart button clicked")
                     self.reset_game()
                     continue
 
                 if self.flip_button.collidepoint(mouse_pos):
+                    print("DEBUG: flip button clicked")
                     self.board_flipped = not self.board_flipped
                     continue
 
@@ -349,8 +417,8 @@ class ChessUI:
                     img = pygame.image.load(path).convert_alpha()
                     img = pygame.transform.smoothscale(img, (SQUARE_SIZE - 12, SQUARE_SIZE - 12))
                     images[symbol] = img
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"WARNING: failed to load piece image {path}: {e}")
 
         return images
 
@@ -402,7 +470,11 @@ class ChessUI:
             if symbol in self.piece_images:
                 self.screen.blit(self.piece_images[symbol], (x + 6, y + 6))
             else:
-                text = self.piece_font.render(FALLBACK_UNICODE[symbol], True, (20, 20, 20) if piece.color == chess.BLACK else (250, 250, 250))
+                text = self.piece_font.render(
+                    FALLBACK_UNICODE[symbol],
+                    True,
+                    (20, 20, 20) if piece.color == chess.BLACK else (250, 250, 250),
+                )
                 shadow = self.piece_font.render(FALLBACK_UNICODE[symbol], True, (40, 40, 40))
                 self.screen.blit(shadow, (x + 18, y + 14))
                 self.screen.blit(text, (x + 15, y + 10))
@@ -444,7 +516,10 @@ class ChessUI:
         self.screen.blit(self.text_font.render("Play vs AI", True, ACCENT), (panel_x + 20, 60))
 
         status_text = "Loaded" if self.model_loaded else "Failed"
-        self.screen.blit(self.small_font.render(f"Model: {status_text}", True, TEXT_COLOR), (panel_x + 20, 90))
+        self.screen.blit(
+            self.small_font.render(f"Model: {status_text}", True, TEXT_COLOR),
+            (panel_x + 20, 90),
+        )
 
         self.draw_button(self.white_button, "Play as White")
         self.draw_button(self.black_button, "Play as Black")
@@ -452,7 +527,11 @@ class ChessUI:
         self.draw_button(self.flip_button, "Flip Board (F)")
 
         y = 450
-        turn_text = "Choose a side" if self.human_color is None else ("White to move" if self.board.turn == chess.WHITE else "Black to move")
+        turn_text = (
+            "Choose a side"
+            if self.human_color is None
+            else ("White to move" if self.board.turn == chess.WHITE else "Black to move")
+        )
         if self.board.is_game_over():
             turn_text = "Game finished"
 
@@ -488,8 +567,11 @@ class ChessUI:
 
         if self.model_error:
             y += 15
-            for line in self.wrap_text(f"Error: {self.model_error}", 220)[:6]:
-                self.screen.blit(self.small_font.render(line, True, (255, 170, 170)), (panel_x + 20, y))
+            for line in self.wrap_text(f"Error: {self.model_error}", 220)[:8]:
+                self.screen.blit(
+                    self.small_font.render(line, True, (255, 170, 170)),
+                    (panel_x + 20, y),
+                )
                 y += 22
 
         if self.game_over_message:
@@ -574,6 +656,14 @@ class ChessUI:
                 and self.awaiting_promotion_from is None
                 and self.board.turn == self.ai_color
             ):
+                print(
+                    "DEBUG: AI turn condition met | human_color =",
+                    self.human_color,
+                    "| ai_color =",
+                    self.ai_color,
+                    "| board.turn =",
+                    self.board.turn,
+                )
                 self.make_ai_move()
 
             self.update_game_over_message()
