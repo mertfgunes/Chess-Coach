@@ -22,38 +22,37 @@ class TrainConfig:
     runs_dir: str = "runs"
     checkpoints_dir: str = "checkpoints"
 
-    #Vocab
+    # Vocab
     vocab_path: str = "data/move_vocab.txt"
-    max_moves: int = 5000
+    max_moves: int = 10000
     min_freq: int = 2
 
-    #Dataset sampling
-    max_files: int | None = 2
-    max_games_per_file: int | None = 200
-    max_positions: int | None = 100_000
+    # Dataset sampling
+    max_files: int | None = None
+    max_games_per_file: int | None = None
+    max_positions: int | None = 500_000
 
     skip_unk: bool = True
 
-    #Train split
+    # Train split
     val_ratio: float = 0.1
 
-    #Training
+    # Training
     batch_size: int = 64
     num_workers: int = 0
-    epochs: int = 15
+    epochs: int = 30
     lr: float = 1e-3
     weight_decay: float = 1e-4
 
-    #Model
-    channels: int = 128
+    # Model
+    channels: int = 256
     dropout: float = 0.1
 
-    #Reproducibility
+    # Reproducibility
     seed: int = 42
 
-    #Logging
+    # Logging
     log_every_steps: int = 50
-
 
 def set_seed(seed: int):
     random.seed(seed)
