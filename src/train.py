@@ -34,7 +34,6 @@ class TrainConfig:
 
     skip_unk: bool = True
 
-    # Train split
     #Train split
     val_ratio: float = 0.1
 
@@ -144,7 +143,7 @@ def main():
     vocab = load_or_build_vocab(cfg)
     vocab_size = len(vocab)
 
-    # 2 - Dataset
+    #2-Dataset
     dataset = ChessDataset(
         vocab=vocab,
         data_dir=cfg.data_dir,
@@ -158,7 +157,7 @@ def main():
     if len(dataset) < 100:
         raise RuntimeError("Dataset too small. Increase max_positions/max_files or check your PGNs.")
 
-    # 3 - Train/val split
+    #3-Train/val split
     val_len = int(len(dataset) * cfg.val_ratio)
     train_len = len(dataset) - val_len
     train_ds, val_ds = random_split(
@@ -184,14 +183,14 @@ def main():
 
     print(f"[Split] train={len(train_ds):,} val={len(val_ds):,}")
 
-    # 4 - Model
+    #4-Model
     model = PolicyCNN(
         vocab_size=vocab_size,
         channels=cfg.channels,
         dropout=cfg.dropout,
     ).to(device)
 
-    # 5 - Loss + optimizer + scheduler
+    # 5-Loss + optimizer + scheduler
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -207,7 +206,7 @@ def main():
         min_lr=cfg.min_lr,
     )
 
-    # 6 - TensorBoard
+    #6-TensorBoard
     run_name = time.strftime("chess_%Y%m%d_%H%M%S")
     writer = SummaryWriter(log_dir=os.path.join(cfg.runs_dir, run_name))
     writer.add_text("debug", "training started", 0)
@@ -267,7 +266,7 @@ def main():
                     f"LR: {current_lr:.6f}"
                 )
 
-        # Validation
+        #Validation
         model.eval()
         val_loss_sum = 0.0
         val_correct_top1_sum = 0.0
@@ -313,7 +312,7 @@ def main():
             f"LR: {current_lr:.6f}"
         )
 
-        # TensorBoard
+        #TensorBoard
         writer.add_scalar("train/loss", train_loss_avg, epoch)
         writer.add_scalar("train/acc_top1", train_acc1_avg, epoch)
         writer.add_scalar("train/acc_top5", train_acc5_avg, epoch)
@@ -324,7 +323,7 @@ def main():
         writer.add_scalar("train/lr", current_lr, epoch)
         writer.flush()
 
-        # Always keep the last model
+        #always keep the last model
         save_checkpoint(
             path=last_model_path,
             model=model,
@@ -335,7 +334,7 @@ def main():
             cfg=cfg,
         )
 
-        # Save best model
+        #save best model
         if val_acc1 > best_val_acc1:
             best_val_acc1 = val_acc1
             best_epoch = epoch
