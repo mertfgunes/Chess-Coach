@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import random
 
 import chess
@@ -9,20 +10,21 @@ import torch.nn as nn
 from move_vocab import MoveVocab
 from encoding import board_to_tensor
 from model import PolicyCNN
+from train import TrainConfig
 
 
-MODEL_PATH = "checkpoints/best_model.pt"
-VOCAB_PATH = "data/move_vocab.txt"
+cfg = TrainConfig()
+
+MODEL_PATH = os.path.join(cfg.checkpoints_dir, "best_model.pt")
+VOCAB_PATH = cfg.vocab_path
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-#ai behaviour settings
-TOP_K = 1          #best K legal moves (it was 3 now made it 3 to see its best performance.)
-TEMPERATURE = 0.8  #lower = more deterministic, higher = more random
-MODEL_CHANNELS = 128
-MODEL_DROPOUT = 0.1
+# ai behaviour settings
+TOP_K = 1
+TEMPERATURE = 0.8
 
 
-#implementing this because the AI can not understand the problem with taking the free pieces.
+# implementing this because the AI can not understand the problem with taking free pieces
 PIECE_VALUES = {
     chess.PAWN: 1,
     chess.KNIGHT: 3,
@@ -34,8 +36,6 @@ PIECE_VALUES = {
 
 
 def board_to_extras(board: chess.Board) -> torch.Tensor:
-    # These extra features must match training-time extras.
-    # 6 features are used here because your checkpoint shape shows 128 + 6 = 134.
     extras = torch.tensor(
         [
             1.0 if board.turn == chess.WHITE else 0.0,
@@ -51,18 +51,30 @@ def board_to_extras(board: chess.Board) -> torch.Tensor:
 
 
 def load_model():
-    model_path = "checkpoints/best_model.pt"
-    vocab_path = "data/move_vocab.txt"
+    if not os.path.exists(VOCAB_PATH):
+        raise FileNotFoundError(f"Vocab file not found: {VOCAB_PATH}")
 
-    vocab = MoveVocab.load(vocab_path)
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(f"Checkpoint file not found: {MODEL_PATH}")
+
+    vocab = MoveVocab.load(VOCAB_PATH)
 
     model = PolicyCNN(
         vocab_size=len(vocab),
-        channels=MODEL_CHANNELS,
-        dropout=MODEL_DROPOUT,
+        channels=cfg.channels,
+        dropout=cfg.dropout,
     ).to(DEVICE)
 
-    state_dict = torch.load(model_path, map_location=DEVICE)
+    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
+
+    # supports both:
+    # 1) old format: raw state_dict
+    # 2) new format: {"model_state_dict": ..., ...}
+    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
+        state_dict = checkpoint["model_state_dict"]
+    else:
+        state_dict = checkpoint
+
     model.load_state_dict(state_dict)
     model.eval()
 
@@ -119,20 +131,20 @@ def tactical_capture_score(board: chess.Board, move: chess.Move) -> float:
 
     score = 0.0
 
-    #base priority: winning bigger material is good
+    # base priority: winning bigger material is good
     score += captured_value * 20
 
-    #prefer using lower-value attacker to take higher-value victim
+    # prefer using lower-value attacker to take higher-value victim
     score += (captured_value - attacker_value) * 8
 
-    #strong bonus for truly safe captures
+    # strong bonus for truly safe captures
     if safe_after_capture:
         score += 25
     else:
-        #penalize unsafe captures, but still allow huge wins like free queen captures
+        # penalize unsafe captures, but still allow huge wins like free queen captures
         score -= attacker_value * 6
 
-    #extra bonuses for high-value targets
+    # extra bonuses for high-value targets
     if captured_type == chess.QUEEN:
         score += 120
     elif captured_type == chess.ROOK:
@@ -159,8 +171,7 @@ def find_best_tactical_move(board: chess.Board) -> chess.Move | None:
 
     best_move, best_score = scored_moves[0]
 
-    #only override the neural model if the tactic is clearly attractive.
-    #this is tuned to grab hanging queens/rooks much more reliably.
+    # only override the neural model if the tactic is clearly attractive
     if best_score >= 35:
         return best_move
 
@@ -175,7 +186,6 @@ def predict_legal_move(
     top_k: int = TOP_K,
     temperature: float = TEMPERATURE,
 ) -> chess.Move:
-    #1st tactical override for obvious captures / hanging pieces
     tactical_move = find_best_tactical_move(board)
     if tactical_move is not None:
         return tactical_move
@@ -198,25 +208,20 @@ def predict_legal_move(
         score = logits[move_idx].item()
         scored_legal_moves.append((move, score))
 
-    #fallback if all legal moves are unknown to vocab
+    # fallback if all legal moves are unknown to vocab
     if not scored_legal_moves:
         return random.choice(legal_moves)
 
-    #sort best to worst
     scored_legal_moves.sort(key=lambda x: x[1], reverse=True)
 
-    #keep only top-k
     k = max(1, min(top_k, len(scored_legal_moves)))
     candidates = scored_legal_moves[:k]
 
-    #if top_k == 1, deterministic best move
     if k == 1:
         return candidates[0][0]
 
-    #temperature-scaled softmax over candidate scores
     scores = torch.tensor([score for _, score in candidates], dtype=torch.float32)
 
-    #prevent divide-by-zero or weird values
     temperature = max(temperature, 1e-6)
     probs = torch.softmax(scores / temperature, dim=0).tolist()
 
