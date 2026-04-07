@@ -9,15 +9,14 @@ import chess
 import pygame
 
 from play_against_ai import load_model, predict_legal_move
+from coach_service import ChessCoachService
+from coach_evaluation import evaluate_position
+from coach_blunder import classify_move_loss, explain_bad_move
 
 
-#ui configs
-#these are just standart
-
-#white is white, black is black type of bs
 BOARD_SIZE = 8
 SQUARE_SIZE = 96
-SIDE_PANEL_WIDTH = 260
+SIDE_PANEL_WIDTH = 300
 WINDOW_WIDTH = BOARD_SIZE * SQUARE_SIZE + SIDE_PANEL_WIDTH
 WINDOW_HEIGHT = BOARD_SIZE * SQUARE_SIZE
 FPS = 60
@@ -37,7 +36,6 @@ BUTTON_HOVER = (95, 95, 95)
 
 ASSETS_DIR = "assets/pieces"
 
-#piece images that are in the assets.
 PIECE_IMAGE_NAMES = {
     "P": "whitepawn.png",
     "N": "whiteknight.png",
@@ -52,10 +50,7 @@ PIECE_IMAGE_NAMES = {
     "q": "blackqueen.png",
     "k": "blackking.png",
 }
-#not sure even if i need this anymore since ive images
-#but you know what they say.
 
-#if it aint broke dont fix it.
 FALLBACK_UNICODE = {
     "P": "♙",
     "N": "♘",
@@ -103,26 +98,29 @@ class ChessUI:
         self.ai_thinking = False
         self.game_over_message = ""
 
+        self.coach = ChessCoachService()
+        self.latest_analysis = self.coach.analyze_position(self.board, self.model, self.vocab)
+        self.latest_move_feedback: Optional[str] = None
+
         self.piece_images = self.load_piece_images()
 
         panel_x = BOARD_SIZE * SQUARE_SIZE + 20
-        self.white_button = pygame.Rect(panel_x, 120, 220, 50)
-        self.black_button = pygame.Rect(panel_x, 190, 220, 50)
-        self.restart_button = pygame.Rect(panel_x, 300, 220, 50)
-        self.flip_button = pygame.Rect(panel_x, 370, 220, 50)
+        self.white_button = pygame.Rect(panel_x, 120, 260, 50)
+        self.black_button = pygame.Rect(panel_x, 190, 260, 50)
+        self.restart_button = pygame.Rect(panel_x, 300, 260, 50)
+        self.flip_button = pygame.Rect(panel_x, 370, 260, 50)
 
         self.board_flipped = False
 
         self.load_ai_once()
 
-    #most ai implementation that is required. 
-    #make the move, predict the legal move etc
     def load_ai_once(self):
         try:
             print("DEBUG: load_ai_once() called")
             self.model, self.vocab = load_model()
             self.model_loaded = True
             self.model_error = None
+            self.latest_analysis = self.coach.analyze_position(self.board, self.model, self.vocab)
             print("DEBUG: model loaded successfully")
             print("DEBUG: vocab loaded =", self.vocab is not None)
         except Exception as e:
@@ -130,6 +128,9 @@ class ChessUI:
             self.model_error = str(e)
             print("ERROR in load_ai_once():", e)
             traceback.print_exc()
+
+    def update_coach_analysis(self):
+        self.latest_analysis = self.coach.analyze_position(self.board, self.model, self.vocab)
 
     def make_ai_move(self):
         if not self.model_loaded:
@@ -170,6 +171,7 @@ class ChessUI:
                 self.board.push(move)
                 self.last_move = move
                 self.clear_selection()
+                self.update_coach_analysis()
             else:
                 self.model_error = f"Illegal AI move returned: {move.uci()}"
                 print("ERROR: Illegal AI move returned:", move.uci())
@@ -182,7 +184,6 @@ class ChessUI:
 
         self.ai_thinking = False
 
-    #all game state is handled here.
     def reset_game(self):
         self.board = chess.Board()
         self.selected_square = None
@@ -192,6 +193,8 @@ class ChessUI:
         self.awaiting_promotion_to = None
         self.ai_thinking = False
         self.game_over_message = ""
+        self.latest_move_feedback = None
+        self.update_coach_analysis()
 
     def choose_side(self, color: chess.Color):
         print("DEBUG: choose_side() called with", "white" if color == chess.WHITE else "black")
@@ -210,7 +213,6 @@ class ChessUI:
         self.selected_square = None
         self.legal_targets = []
 
-    #end game results output
     def update_game_over_message(self):
         if not self.board.is_game_over():
             self.game_over_message = ""
@@ -230,7 +232,6 @@ class ChessUI:
         else:
             self.game_over_message = "Game over."
 
-    #coordinates for the board. a1-h8
     def screen_to_square(self, pos: Tuple[int, int]) -> Optional[int]:
         x, y = pos
         if x < 0 or x >= BOARD_SIZE * SQUARE_SIZE or y < 0 or y >= BOARD_SIZE * SQUARE_SIZE:
@@ -245,7 +246,6 @@ class ChessUI:
 
         return chess.square(file, rank)
 
-    #board implementation for 8*8    
     def square_to_screen(self, square: int) -> Tuple[int, int]:
         file = chess.square_file(square)
         rank = chess.square_rank(square)
@@ -258,7 +258,6 @@ class ChessUI:
         y = (7 - rank) * SQUARE_SIZE
         return x, y
 
-    #user input is handled here
     def handle_board_click(self, mouse_pos: Tuple[int, int]):
         if self.human_color is None:
             print("DEBUG: board click ignored - choose side first")
@@ -320,11 +319,54 @@ class ChessUI:
             return True
 
         move = legal_moves[0]
+        board_before = self.board.copy(stack=False)
+
         print("DEBUG: human move pushed:", move.uci())
         self.board.push(move)
         self.last_move = move
         self.clear_selection()
+        self.update_coach_analysis()
+        self.update_move_feedback(board_before, move)
         return True
+
+    def update_move_feedback(self, board_before: chess.Board, played_move: chess.Move):
+        if self.model is None or self.vocab is None:
+            self.latest_move_feedback = None
+            return
+
+        best_analysis = self.coach.analyze_position(board_before, self.model, self.vocab)
+        if not best_analysis.top_moves:
+            self.latest_move_feedback = None
+            return
+
+        best_move = best_analysis.top_moves[0].move
+
+        played_board = board_before.copy(stack=False)
+        played_board.push(played_move)
+        played_score = evaluate_position(played_board).total
+
+        best_board = board_before.copy(stack=False)
+        best_board.push(best_move)
+        best_score = evaluate_position(best_board).total
+
+        if board_before.turn == chess.WHITE:
+            loss = best_score - played_score
+        else:
+            loss = played_score - best_score
+
+        classification = classify_move_loss(loss)
+
+        if played_move == best_move:
+            self.latest_move_feedback = "Your move was: good. You played the best move."
+            return
+
+        reason = explain_bad_move(board_before, played_move, best_move)
+        played_san = board_before.san(played_move)
+        best_san = board_before.san(best_move)
+        self.latest_move_feedback = (
+            f"Your move {played_san} was: {classification}. "
+            f"Best move was {best_san}. {reason}"
+        )
 
     def get_promotion_option_rects(self) -> List[Tuple[int, pygame.Rect]]:
         panel_w, panel_h = 340, 140
@@ -351,10 +393,11 @@ class ChessUI:
 
         return rects
 
-    #promotion options (not really working well but will debug this later)
     def handle_promotion_click(self, mouse_pos: Tuple[int, int]):
         if self.awaiting_promotion_from is None or self.awaiting_promotion_to is None:
             return
+
+        board_before = self.board.copy(stack=False)
 
         for piece_type, rect in self.get_promotion_option_rects():
             if rect.collidepoint(mouse_pos):
@@ -368,6 +411,8 @@ class ChessUI:
                     print("DEBUG: promotion move pushed:", move.uci())
                     self.board.push(move)
                     self.last_move = move
+                    self.update_coach_analysis()
+                    self.update_move_feedback(board_before, move)
                 else:
                     print("ERROR: promotion move not legal:", move.uci())
 
@@ -375,8 +420,7 @@ class ChessUI:
                 self.awaiting_promotion_to = None
                 self.clear_selection()
                 return
-                    
-    #events for controls.
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -422,7 +466,6 @@ class ChessUI:
                 if mouse_pos[0] < BOARD_SIZE * SQUARE_SIZE:
                     self.handle_board_click(mouse_pos)
 
-    #drawing
     def load_piece_images(self) -> Dict[str, pygame.Surface]:
         images: Dict[str, pygame.Surface] = {}
 
@@ -581,9 +624,74 @@ class ChessUI:
             self.screen.blit(font.render(line, True, color), (panel_x + 20, y))
             y += 28
 
+        if self.latest_analysis is not None:
+            y += 10
+            self.screen.blit(
+                self.text_font.render("Coach", True, ACCENT),
+                (panel_x + 20, y),
+            )
+            y += 30
+
+            coach_lines = [
+                self.latest_analysis.winner_hint,
+                self.latest_analysis.summary,
+                f"Score: {self.latest_analysis.score:.2f}",
+                f"Material: {self.latest_analysis.breakdown.material:.2f}",
+                f"Mobility: {self.latest_analysis.breakdown.mobility:.2f}",
+                f"Center: {self.latest_analysis.breakdown.center_control:.2f}",
+                f"King safety: {self.latest_analysis.breakdown.king_safety:.2f}",
+            ]
+
+            for line in coach_lines:
+                for wrapped in self.wrap_text(line, 260):
+                    self.screen.blit(
+                        self.small_font.render(wrapped, True, (220, 220, 220)),
+                        (panel_x + 20, y),
+                    )
+                    y += 20
+                y += 2
+
+            if self.latest_analysis.top_moves:
+                y += 8
+                self.screen.blit(
+                    self.text_font.render("Top moves", True, ACCENT),
+                    (panel_x + 20, y),
+                )
+                y += 28
+
+                for i, move_info in enumerate(self.latest_analysis.top_moves[:3], start=1):
+                    self.screen.blit(
+                        self.small_font.render(f"{i}. {move_info.san} ({move_info.score:.2f})", True, TEXT_COLOR),
+                        (panel_x + 20, y),
+                    )
+                    y += 20
+
+                    for line in self.wrap_text(move_info.explanation, 250)[:2]:
+                        self.screen.blit(
+                            self.small_font.render(line, True, (200, 200, 255)),
+                            (panel_x + 30, y),
+                        )
+                        y += 18
+                    y += 4
+
+        if self.latest_move_feedback:
+            y += 10
+            self.screen.blit(
+                self.text_font.render("Last move", True, ACCENT),
+                (panel_x + 20, y),
+            )
+            y += 28
+
+            for line in self.wrap_text(self.latest_move_feedback, 260)[:6]:
+                self.screen.blit(
+                    self.small_font.render(line, True, (255, 210, 150)),
+                    (panel_x + 20, y),
+                )
+                y += 20
+
         if self.model_error:
             y += 15
-            for line in self.wrap_text(f"Error: {self.model_error}", 220)[:8]:
+            for line in self.wrap_text(f"Error: {self.model_error}", 260)[:8]:
                 self.screen.blit(
                     self.small_font.render(line, True, (255, 170, 170)),
                     (panel_x + 20, y),
@@ -592,7 +700,7 @@ class ChessUI:
 
         if self.game_over_message:
             y += 15
-            for line in self.wrap_text(self.game_over_message, 220):
+            for line in self.wrap_text(self.game_over_message, 260):
                 self.screen.blit(self.text_font.render(line, True, (255, 220, 120)), (panel_x + 20, y))
                 y += 28
 
@@ -612,23 +720,8 @@ class ChessUI:
         title = self.text_font.render("Choose promotion", True, TEXT_COLOR)
         self.screen.blit(title, (panel_x + 90, panel_y + 15))
 
-        options = [
-            chess.QUEEN,
-            chess.ROOK,
-            chess.BISHOP,
-            chess.KNIGHT,
-        ]
-
-        box_w = 70
-        box_h = 70
-        gap = 10
-        start_x = panel_x + 15
-        y = panel_y + 50
-
-        mouse_pos = pygame.mouse.get_pos()
-
         for piece_type, rect in self.get_promotion_option_rects():
-            color = BUTTON_HOVER if rect.collidepoint(mouse_pos) else BUTTON_COLOR
+            color = BUTTON_HOVER if rect.collidepoint(pygame.mouse.get_pos()) else BUTTON_COLOR
             pygame.draw.rect(self.screen, color, rect, border_radius=8)
             pygame.draw.rect(self.screen, ACCENT, rect, 2, border_radius=8)
 
@@ -660,7 +753,6 @@ class ChessUI:
         if self.awaiting_promotion_from is not None:
             self.draw_promotion_dialog()
 
-    #main loop
     def run(self):
         while True:
             self.handle_events()
