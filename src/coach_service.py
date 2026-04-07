@@ -4,15 +4,21 @@ import chess
 
 from coach_models import PositionAnalysis
 from coach_evaluation import evaluate_position, winner_hint_from_score
+from coach_explainer import explain_move
+from coach_move_selector import get_top_moves
 
 
 class ChessCoachService:
-    def analyze_position(self, board: chess.Board) -> PositionAnalysis:
+    def analyze_position(self, board: chess.Board, model=None, vocab=None) -> PositionAnalysis:
         breakdown = evaluate_position(board)
-        score = breakdown.total
+        score = round(breakdown.total, 2)
         side_to_move = "white" if board.turn == chess.WHITE else "black"
 
         summary = self._build_summary(score, breakdown)
+
+        top_moves = get_top_moves(model, vocab, board, top_n=3)
+        for move_data in top_moves:
+            move_data.explanation = explain_move(move_data)
 
         return PositionAnalysis(
             fen=board.fen(),
@@ -21,7 +27,7 @@ class ChessCoachService:
             winner_hint=winner_hint_from_score(score),
             breakdown=breakdown,
             summary=summary,
-            top_moves=[],
+            top_moves=top_moves,
         )
 
     def _build_summary(self, score: float, breakdown) -> str:
