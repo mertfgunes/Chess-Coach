@@ -19,12 +19,9 @@ MODEL_PATH = os.path.join(cfg.checkpoints_dir, "best_model.pt")
 VOCAB_PATH = cfg.vocab_path
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# ai behaviour settings
 TOP_K = 1
 TEMPERATURE = 0.8
 
-
-# implementing this because the AI can not understand the problem with taking free pieces
 PIECE_VALUES = {
     chess.PAWN: 1,
     chess.KNIGHT: 3,
@@ -36,7 +33,7 @@ PIECE_VALUES = {
 
 
 def board_to_extras(board: chess.Board) -> torch.Tensor:
-    extras = torch.tensor(
+    return torch.tensor(
         [
             1.0 if board.turn == chess.WHITE else 0.0,
             1.0 if board.has_kingside_castling_rights(chess.WHITE) else 0.0,
@@ -47,7 +44,6 @@ def board_to_extras(board: chess.Board) -> torch.Tensor:
         ],
         dtype=torch.float32,
     )
-    return extras
 
 
 def load_model():
@@ -67,9 +63,6 @@ def load_model():
 
     checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
 
-    # supports both:
-    # 1) old format: raw state_dict
-    # 2) new format: {"model_state_dict": ..., ...}
     if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
         state_dict = checkpoint["model_state_dict"]
     else:
@@ -94,10 +87,6 @@ def _captured_piece_type(board: chess.Board, move: chess.Move) -> int | None:
 
 
 def _is_move_safe_enough(board: chess.Board, move: chess.Move) -> bool:
-    """
-    Plays the move on a copy of the board and checks whether the moved piece
-    sits on a square attacked by the opponent afterwards.
-    """
     board_copy = board.copy(stack=False)
     board_copy.push(move)
 
@@ -105,14 +94,54 @@ def _is_move_safe_enough(board: chess.Board, move: chess.Move) -> bool:
     if moved_piece is None:
         return False
 
-    return not board_copy.is_attacked_by(board_copy.turn, move.to_square)
+    opponent_color = board_copy.turn
+    mover_color = not opponent_color
+
+    attacked = board_copy.is_attacked_by(opponent_color, move.to_square)
+    defended = board_copy.is_attacked_by(mover_color, move.to_square)
+
+    if attacked and not defended:
+        return False
+
+    return True
+
+
+def _move_safety_penalty(board: chess.Board, move: chess.Move) -> float:
+    board_copy = board.copy(stack=False)
+    board_copy.push(move)
+
+    moved_piece = board_copy.piece_at(move.to_square)
+    if moved_piece is None:
+        return -100.0
+
+    opponent_color = board_copy.turn
+    mover_color = not opponent_color
+
+    attacked = board_copy.is_attacked_by(opponent_color, move.to_square)
+    defended = board_copy.is_attacked_by(mover_color, move.to_square)
+
+    if not attacked:
+        return 0.0
+
+    piece_value = PIECE_VALUES.get(moved_piece.piece_type, 1)
+
+    if attacked and not defended:
+        return -(piece_value * 2.5)
+
+    enemy_attackers = list(board_copy.attackers(opponent_color, move.to_square))
+    if enemy_attackers:
+        cheapest_enemy = min(
+            PIECE_VALUES.get(board_copy.piece_at(sq).piece_type, 1)
+            for sq in enemy_attackers
+            if board_copy.piece_at(sq) is not None
+        )
+        if cheapest_enemy < piece_value:
+            return -(piece_value * 1.2)
+
+    return -0.2
 
 
 def tactical_capture_score(board: chess.Board, move: chess.Move) -> float:
-    """
-    Scores capture moves with a stronger tactical heuristic.
-    Higher is better.
-    """
     if not board.is_capture(move):
         return float("-inf")
 
@@ -130,21 +159,14 @@ def tactical_capture_score(board: chess.Board, move: chess.Move) -> float:
     safe_after_capture = _is_move_safe_enough(board, move)
 
     score = 0.0
-
-    # base priority: winning bigger material is good
     score += captured_value * 20
-
-    # prefer using lower-value attacker to take higher-value victim
     score += (captured_value - attacker_value) * 8
 
-    # strong bonus for truly safe captures
     if safe_after_capture:
         score += 25
     else:
-        # penalize unsafe captures, but still allow huge wins like free queen captures
         score -= attacker_value * 6
 
-    # extra bonuses for high-value targets
     if captured_type == chess.QUEEN:
         score += 120
     elif captured_type == chess.ROOK:
@@ -156,10 +178,6 @@ def tactical_capture_score(board: chess.Board, move: chess.Move) -> float:
 
 
 def find_best_tactical_move(board: chess.Board) -> chess.Move | None:
-    """
-    Finds a clearly strong tactical capture if one exists.
-    Returns None if there is no obvious tactical override.
-    """
     legal_moves = list(board.legal_moves)
     capture_moves = [move for move in legal_moves if board.is_capture(move)]
 
@@ -171,7 +189,6 @@ def find_best_tactical_move(board: chess.Board) -> chess.Move | None:
 
     best_move, best_score = scored_moves[0]
 
-    # only override the neural model if the tactic is clearly attractive
     if best_score >= 35:
         return best_move
 
@@ -205,10 +222,17 @@ def predict_legal_move(
         if move_idx == unk_idx:
             continue
 
-        score = logits[move_idx].item()
+        score = float(logits[move_idx].item())
+        score += _move_safety_penalty(board, move)
+
+        if board.gives_check(move):
+            score += 0.5
+
+        if board.is_capture(move):
+            score += 0.3
+
         scored_legal_moves.append((move, score))
 
-    # fallback if all legal moves are unknown to vocab
     if not scored_legal_moves:
         return random.choice(legal_moves)
 
@@ -221,7 +245,6 @@ def predict_legal_move(
         return candidates[0][0]
 
     scores = torch.tensor([score for _, score in candidates], dtype=torch.float32)
-
     temperature = max(temperature, 1e-6)
     probs = torch.softmax(scores / temperature, dim=0).tolist()
 

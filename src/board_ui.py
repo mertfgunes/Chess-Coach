@@ -112,6 +112,15 @@ class ChessUI:
 
         self.board_flipped = False
 
+        self.analysis_viewport = pygame.Rect(
+            BOARD_SIZE * SQUARE_SIZE + 10,
+            450,
+            SIDE_PANEL_WIDTH - 20,
+            WINDOW_HEIGHT - 460,
+        )
+        self.analysis_scroll_offset = 0
+        self.analysis_content_height = self.analysis_viewport.height
+
         self.load_ai_once()
 
     def load_ai_once(self):
@@ -427,6 +436,12 @@ class ChessUI:
                 pygame.quit()
                 sys.exit()
 
+            if event.type == pygame.MOUSEWHEEL:
+                mouse_pos = pygame.mouse.get_pos()
+                if self.analysis_viewport.collidepoint(mouse_pos):
+                    self.scroll_analysis(-event.y * 30)
+                continue
+
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
                     print("DEBUG: restart key pressed")
@@ -438,8 +453,22 @@ class ChessUI:
                     print("DEBUG: clear selection")
                     self.clear_selection()
 
-            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if event.type == pygame.MOUSEBUTTONDOWN:
                 mouse_pos = event.pos
+
+                #mouse wheel fallback
+                if event.button == 4:
+                    if self.analysis_viewport.collidepoint(mouse_pos):
+                        self.scroll_analysis(-30)
+                        continue
+
+                if event.button == 5:
+                    if self.analysis_viewport.collidepoint(mouse_pos):
+                        self.scroll_analysis(30)
+                        continue
+
+                if event.button != 1:
+                    continue
 
                 if self.white_button.collidepoint(mouse_pos):
                     self.choose_side(chess.WHITE)
@@ -465,7 +494,6 @@ class ChessUI:
 
                 if mouse_pos[0] < BOARD_SIZE * SQUARE_SIZE:
                     self.handle_board_click(mouse_pos)
-
     def load_piece_images(self) -> Dict[str, pygame.Surface]:
         images: Dict[str, pygame.Surface] = {}
 
@@ -566,6 +594,17 @@ class ChessUI:
             lines.append(current)
 
         return lines
+    
+    def clamp_analysis_scroll(self):
+        max_scroll = max(0, self.analysis_content_height - self.analysis_viewport.height)
+        if self.analysis_scroll_offset < 0:
+            self.analysis_scroll_offset = 0
+        if self.analysis_scroll_offset > max_scroll:
+            self.analysis_scroll_offset = max_scroll
+
+    def scroll_analysis(self, delta: int):
+        self.analysis_scroll_offset += delta
+        self.clamp_analysis_scroll()
 
     def draw_side_panel(self):
         panel_x = BOARD_SIZE * SQUARE_SIZE
@@ -585,7 +624,18 @@ class ChessUI:
         self.draw_button(self.restart_button, "Restart (R)")
         self.draw_button(self.flip_button, "Flip Board (F)")
 
-        y = 450
+        #fixed viewport background
+        pygame.draw.rect(self.screen, (45, 45, 45), self.analysis_viewport, border_radius=8)
+        pygame.draw.rect(self.screen, ACCENT, self.analysis_viewport, 2, border_radius=8)
+
+        #create a tall surface for scrollable content
+        content_width = self.analysis_viewport.width - 12
+        content_height_guess = 2200
+        content_surface = pygame.Surface((content_width, content_height_guess))
+        content_surface.fill((45, 45, 45))
+
+        y = 12
+
         turn_text = (
             "Choose a side"
             if self.human_color is None
@@ -594,20 +644,34 @@ class ChessUI:
         if self.board.is_game_over():
             turn_text = "Game finished"
 
-        self.screen.blit(self.text_font.render(turn_text, True, TEXT_COLOR), (panel_x + 20, y))
-        y += 35
+        content_surface.blit(
+            self.text_font.render(turn_text, True, TEXT_COLOR),
+            (10, y),
+        )
+        y += 34
 
         if self.human_color is not None:
             your_side = "White" if self.human_color == chess.WHITE else "Black"
             ai_side = "Black" if self.ai_color == chess.BLACK else "White"
-            self.screen.blit(self.small_font.render(f"You: {your_side}", True, TEXT_COLOR), (panel_x + 20, y))
-            y += 25
-            self.screen.blit(self.small_font.render(f"AI: {ai_side}", True, TEXT_COLOR), (panel_x + 20, y))
-            y += 25
+
+            content_surface.blit(
+                self.small_font.render(f"You: {your_side}", True, TEXT_COLOR),
+                (10, y),
+            )
+            y += 22
+
+            content_surface.blit(
+                self.small_font.render(f"AI: {ai_side}", True, TEXT_COLOR),
+                (10, y),
+            )
+            y += 22
 
         ai_status = "Thinking..." if self.ai_thinking else "Ready"
-        self.screen.blit(self.small_font.render(f"Status: {ai_status}", True, TEXT_COLOR), (panel_x + 20, y))
-        y += 35
+        content_surface.blit(
+            self.small_font.render(f"Status: {ai_status}", True, TEXT_COLOR),
+            (10, y),
+        )
+        y += 28
 
         controls = [
             "Controls:",
@@ -621,16 +685,16 @@ class ChessUI:
         for i, line in enumerate(controls):
             font = self.text_font if i == 0 else self.small_font
             color = TEXT_COLOR if i == 0 else (220, 220, 220)
-            self.screen.blit(font.render(line, True, color), (panel_x + 20, y))
-            y += 28
+            content_surface.blit(font.render(line, True, color), (10, y))
+            y += 24 if i == 0 else 20
 
         if self.latest_analysis is not None:
             y += 10
-            self.screen.blit(
+            content_surface.blit(
                 self.text_font.render("Coach", True, ACCENT),
-                (panel_x + 20, y),
+                (10, y),
             )
-            y += 30
+            y += 28
 
             coach_lines = [
                 self.latest_analysis.winner_hint,
@@ -642,68 +706,123 @@ class ChessUI:
                 f"King safety: {self.latest_analysis.breakdown.king_safety:.2f}",
             ]
 
+            # optional extra field if you added piece_safety later
+            if hasattr(self.latest_analysis.breakdown, "piece_safety"):
+                coach_lines.append(f"Piece safety: {self.latest_analysis.breakdown.piece_safety:.2f}")
+
             for line in coach_lines:
-                for wrapped in self.wrap_text(line, 260):
-                    self.screen.blit(
+                for wrapped in self.wrap_text(line, content_width - 20):
+                    content_surface.blit(
                         self.small_font.render(wrapped, True, (220, 220, 220)),
-                        (panel_x + 20, y),
+                        (10, y),
                     )
                     y += 20
                 y += 2
 
             if self.latest_analysis.top_moves:
                 y += 8
-                self.screen.blit(
+                content_surface.blit(
                     self.text_font.render("Top moves", True, ACCENT),
-                    (panel_x + 20, y),
+                    (10, y),
                 )
                 y += 28
 
                 for i, move_info in enumerate(self.latest_analysis.top_moves[:3], start=1):
-                    self.screen.blit(
-                        self.small_font.render(f"{i}. {move_info.san} ({move_info.score:.2f})", True, TEXT_COLOR),
-                        (panel_x + 20, y),
+                    content_surface.blit(
+                        self.small_font.render(
+                            f"{i}. {move_info.san} ({move_info.score:.2f})",
+                            True,
+                            TEXT_COLOR,
+                        ),
+                        (10, y),
                     )
                     y += 20
 
-                    for line in self.wrap_text(move_info.explanation, 250)[:2]:
-                        self.screen.blit(
+                    for line in self.wrap_text(move_info.explanation, content_width - 30)[:3]:
+                        content_surface.blit(
                             self.small_font.render(line, True, (200, 200, 255)),
-                            (panel_x + 30, y),
+                            (20, y),
                         )
                         y += 18
                     y += 4
 
         if self.latest_move_feedback:
             y += 10
-            self.screen.blit(
+            content_surface.blit(
                 self.text_font.render("Last move", True, ACCENT),
-                (panel_x + 20, y),
+                (10, y),
             )
             y += 28
 
-            for line in self.wrap_text(self.latest_move_feedback, 260)[:6]:
-                self.screen.blit(
+            for line in self.wrap_text(self.latest_move_feedback, content_width - 20)[:12]:
+                content_surface.blit(
                     self.small_font.render(line, True, (255, 210, 150)),
-                    (panel_x + 20, y),
+                    (10, y),
                 )
                 y += 20
 
         if self.model_error:
-            y += 15
-            for line in self.wrap_text(f"Error: {self.model_error}", 260)[:8]:
-                self.screen.blit(
+            y += 10
+            content_surface.blit(
+                self.text_font.render("Error", True, (255, 170, 170)),
+                (10, y),
+            )
+            y += 28
+
+            for line in self.wrap_text(f"{self.model_error}", content_width - 20)[:12]:
+                content_surface.blit(
                     self.small_font.render(line, True, (255, 170, 170)),
-                    (panel_x + 20, y),
+                    (10, y),
                 )
-                y += 22
+                y += 20
 
         if self.game_over_message:
-            y += 15
-            for line in self.wrap_text(self.game_over_message, 260):
-                self.screen.blit(self.text_font.render(line, True, (255, 220, 120)), (panel_x + 20, y))
-                y += 28
+            y += 10
+            content_surface.blit(
+                self.text_font.render("Game over", True, (255, 220, 120)),
+                (10, y),
+            )
+            y += 28
 
+            for line in self.wrap_text(self.game_over_message, content_width - 20):
+                content_surface.blit(
+                    self.small_font.render(line, True, (255, 220, 120)),
+                    (10, y),
+                )
+                y += 20
+
+        self.analysis_content_height = max(y + 10, self.analysis_viewport.height)
+        self.clamp_analysis_scroll()
+
+        #clip and draw the visible part
+        visible_rect = pygame.Rect(
+            0,
+            self.analysis_scroll_offset,
+            self.analysis_viewport.width - 12,
+            self.analysis_viewport.height,
+        )
+
+        self.screen.blit(
+            content_surface,
+            (self.analysis_viewport.x + 6, self.analysis_viewport.y),
+            visible_rect,
+        )
+
+        #draw a scrollbar if needed
+        max_scroll = max(0, self.analysis_content_height - self.analysis_viewport.height)
+        if max_scroll > 0:
+            track_rect = pygame.Rect(
+                self.analysis_viewport.right - 8,
+                self.analysis_viewport.y + 6,
+                4,
+                self.analysis_viewport.height - 12,
+            )
+            pygame.draw.rect(self.screen, (80, 80, 80), track_rect, border_radius=3)
+
+            thumb_height = max(30, int(track_rect.height * (self.analysis_viewport.height / self.analysis_content_height)))
+            thumb_y = track_rect.y + int((track_rect.height - thumb_height) * (self.analysis_scroll_offset / max_scroll))
+            thumb_rect = pygame.Rect(track_rect.x, thumb_y, track_rect.width, thumb_height)
+            pygame.draw.rect(self.screen, ACCENT, thumb_rect, border_radius=3)
     def draw_promotion_dialog(self):
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 140))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import chess
 from coach_models import EvaluationBreakdown
+from coach_tactics import immediate_material_threat
 
 PIECE_VALUES = {
     chess.PAWN: 1.0,
@@ -112,6 +113,7 @@ def evaluate_position(board: chess.Board) -> EvaluationBreakdown:
         king_safety=evaluate_king_safety(board),
         development=evaluate_development(board),
         pawn_structure=evaluate_pawn_structure(board),
+        piece_safety=evaluate_piece_safety(board),
     )
 
 
@@ -125,3 +127,11 @@ def winner_hint_from_score(score: float) -> str:
     if score < -0.4:
         return "Black is slightly better"
     return "The position is roughly equal"
+
+def evaluate_piece_safety(board: chess.Board) -> float:
+    white_threat = immediate_material_threat(board, chess.WHITE)
+    black_threat = immediate_material_threat(board, chess.BLACK)
+
+    # if White has hanging pieces, that's bad for White
+    # if Black has hanging pieces, that's good for White
+    return (black_threat - white_threat) * 0.35
