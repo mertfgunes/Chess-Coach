@@ -13,7 +13,8 @@ class EvaluationBreakdown:
     king_safety: float = 0.0
     development: float = 0.0
     pawn_structure: float = 0.0
-
+    piece_safety: float = 0.0
+    
     @property
     def total(self) -> float:
         return (
