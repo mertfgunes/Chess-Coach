@@ -20,12 +20,12 @@ class DatasetStats:
 
 class ChessDataset(Dataset):
     """
-    Supervised dataset:
+    Supervised dataset (policy + value):
+
       X = encoded board tensor (12, 8, 8)
       extras = extra board-state features (6,)
-      y = move class id (int)
-
-    This implementation preloads samples into memory for simplicity.
+      policy_target = move class id (int)
+      value_target = float (-1 to 1)
     """
 
     def __init__(
@@ -42,7 +42,10 @@ class ChessDataset(Dataset):
     ):
         self.vocab = vocab
         self.dtype = dtype
-        self.samples: List[Tuple[torch.Tensor, torch.Tensor, int]] = []
+
+        self.samples: List[
+            Tuple[torch.Tensor, torch.Tensor, int, float]
+        ] = []
 
         loader = PGNLoader(data_dir=data_dir)
 
@@ -50,23 +53,25 @@ class ChessDataset(Dataset):
         kept = 0
         unk_skipped = 0
 
-        for board, move in loader.generate_position_move_pairs(
+        for board, move, game_value in loader.generate_position_move_result_triples(
             max_files=max_files,
             max_games_per_file=max_games_per_file,
             max_positions=max_positions,
         ):
             total_seen += 1
-            y = vocab.encode(move)
 
-            # UNK index is vocab.stoi["<UNK>"] which is defined as 1
-            if skip_unk and y == vocab.stoi[vocab.UNK]:
+            policy_y = vocab.encode(move)
+
+            if skip_unk and policy_y == vocab.stoi[vocab.UNK]:
                 unk_skipped += 1
                 continue
 
             x = board_to_tensor(board, dtype=dtype)
             extras = board_extras(board, dtype=dtype)
 
-            self.samples.append((x, extras, y))
+            value_y = float(game_value)
+
+            self.samples.append((x, extras, policy_y, value_y))
             kept += 1
 
         self.stats = DatasetStats(
@@ -88,6 +93,11 @@ class ChessDataset(Dataset):
         return len(self.samples)
 
     def __getitem__(self, idx: int):
-        x, extras, y = self.samples[idx]
-        #CrossEntropyLoss expects y as a LongTensor
-        return x, extras, torch.tensor(y, dtype=torch.long)
+        x, extras, policy_y, value_y = self.samples[idx]
+
+        return (
+            x,
+            extras,
+            torch.tensor(policy_y, dtype=torch.long),
+            torch.tensor(value_y, dtype=torch.float32),
+        )

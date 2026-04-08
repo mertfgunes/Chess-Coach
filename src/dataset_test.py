@@ -2,7 +2,6 @@ from torch.utils.data import DataLoader
 from move_vocab import MoveVocab
 from dataset import ChessDataset
 
-#build vocab
 vocab = MoveVocab.build_from_pgns(
     data_dir="data",
     max_moves=5000,
@@ -23,8 +22,9 @@ dataset = ChessDataset(
 
 loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
-X, extras, y = next(iter(loader))
-print("Batch X:", X.shape)          #expected 32 12 8 8
-print("Batch extras:", extras.shape) #expected 32 6
-print("Batch y:", y.shape)          #expected 32
-print("y min/max:", y.min().item(), y.max().item())
+X, extras, policy_y, value_y = next(iter(loader))
+
+print("Batch X:", X.shape)              # (32, 12, 8, 8)
+print("Batch extras:", extras.shape)   # (32, 6)
+print("Policy y:", policy_y.shape)     # (32,)
+print("Value y:", value_y.shape)       # (32,)
