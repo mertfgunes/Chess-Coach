@@ -25,12 +25,9 @@ class PGNLoader:
         min_black_elo: int | None = None,
         min_avg_elo: int | None = None,
     ) -> bool:
-        #return 1 if the game passes rating-based filtering.
-        
         white_elo = self._safe_int(game.headers.get("WhiteElo"))
         black_elo = self._safe_int(game.headers.get("BlackElo"))
 
-        #if a filter is requested but Elo is missing, reject the game
         if min_white_elo is not None:
             if white_elo is None or white_elo < min_white_elo:
                 return False
@@ -48,6 +45,23 @@ class PGNLoader:
 
         return True
 
+    def _result_to_value(self, result: str) -> float | None:
+        """
+        Convert PGN Result header into value target:
+          1-0   ->  1.0
+          1/2-1/2 -> 0.0
+          0-1   -> -1.0
+
+        Returns None if result is missing or unusable.
+        """
+        if result == "1-0":
+            return 1.0
+        if result == "1/2-1/2":
+            return 0.0
+        if result == "0-1":
+            return -1.0
+        return None
+
     def load_games(
         self,
         *,
@@ -57,9 +71,6 @@ class PGNLoader:
         min_black_elo: int | None = None,
         min_avg_elo: int | None = None,
     ):
-        
-        #generator that yields (filename, game) for PGN games that pass filters.
-        
         files = [f for f in os.listdir(self.data_dir) if f.lower().endswith(".pgn")]
         files.sort()
 
@@ -69,7 +80,6 @@ class PGNLoader:
         for filename in files:
             path = os.path.join(self.data_dir, filename)
 
-            #errors="replace" prevents crashes on weird characters
             with open(path, "r", encoding="utf-8", errors="replace") as pgn_file:
                 game_count = 0
 
@@ -92,6 +102,57 @@ class PGNLoader:
                     game_count += 1
                     yield filename, game
 
+    def generate_position_move_result_triples(
+        self,
+        *,
+        max_files=None,
+        max_games_per_file=None,
+        max_positions=None,
+        min_white_elo: int | None = None,
+        min_black_elo: int | None = None,
+        min_avg_elo: int | None = None,
+    ):
+        """
+        Yield (board, move, game_result_value) where:
+          board = position before move
+          move = next played move
+          game_result_value in {-1.0, 0.0, 1.0}
+
+        Skips games with missing or invalid PGN result headers.
+        """
+        yielded = 0
+
+        for filename, game in self.load_games(
+            max_files=max_files,
+            max_games_per_file=max_games_per_file,
+            min_white_elo=min_white_elo,
+            min_black_elo=min_black_elo,
+            min_avg_elo=min_avg_elo,
+        ):
+            result_str = game.headers.get("Result", "")
+            game_value = self._result_to_value(result_str)
+
+            if game_value is None:
+                continue
+
+            board = game.board()
+
+            try:
+                for move in game.mainline_moves():
+                    if move not in board.legal_moves:
+                        break
+
+                    yield board.copy(), move, game_value
+                    board.push(move)
+
+                    yielded += 1
+                    if max_positions is not None and yielded >= max_positions:
+                        return
+
+            except Exception:
+                # corrupted game, skip
+                continue
+
     def generate_position_move_pairs(
         self,
         *,
@@ -102,32 +163,16 @@ class PGNLoader:
         min_black_elo: int | None = None,
         min_avg_elo: int | None = None,
     ):
-        
-        #Generator yielding (board, move) pairs from games that pass filters.
-        
-        yielded = 0
-
-        for filename, game in self.load_games(
+        """
+        Backward-compatible old API.
+        Yields only (board, move).
+        """
+        for board, move, _value in self.generate_position_move_result_triples(
             max_files=max_files,
             max_games_per_file=max_games_per_file,
+            max_positions=max_positions,
             min_white_elo=min_white_elo,
             min_black_elo=min_black_elo,
             min_avg_elo=min_avg_elo,
         ):
-            board = game.board()
-
-            try:
-                for move in game.mainline_moves():
-                    if move not in board.legal_moves:
-                        break
-
-                    yield board.copy(), move
-                    board.push(move)
-
-                    yielded += 1
-                    if max_positions is not None and yielded >= max_positions:
-                        return
-
-            except Exception:
-                # corrupted game, skip
-                continue
+            yield board, move
