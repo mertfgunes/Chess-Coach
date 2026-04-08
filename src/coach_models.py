@@ -24,6 +24,7 @@ class EvaluationBreakdown:
             + self.king_safety
             + self.development
             + self.pawn_structure
+            + self.piece_safety
         )
 
 

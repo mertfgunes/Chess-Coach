@@ -7,6 +7,7 @@ import chess
 import torch
 import torch.nn as nn
 
+from coach_tactics import hanging_material_after_move
 from move_vocab import MoveVocab
 from encoding import board_to_tensor
 from model import PolicyCNN
@@ -117,6 +118,9 @@ def _is_move_safe_enough(board: chess.Board, move: chess.Move) -> bool:
     if attacked and not defended:
         return False
 
+    if hanging_material_after_move(board, move) > 0:
+        return False
+
     return True
 
 
@@ -134,25 +138,29 @@ def _move_safety_penalty(board: chess.Board, move: chess.Move) -> float:
     attacked = board_copy.is_attacked_by(opponent_color, move.to_square)
     defended = board_copy.is_attacked_by(mover_color, move.to_square)
 
-    if not attacked:
-        return 0.0
-
+    penalty = 0.0
     piece_value = PIECE_VALUES.get(moved_piece.piece_type, 1)
 
     if attacked and not defended:
-        return -(piece_value * 2.5)
+        penalty -= piece_value * 2.5
+    elif attacked:
+        enemy_attackers = list(board_copy.attackers(opponent_color, move.to_square))
+        if enemy_attackers:
+            cheapest_enemy = min(
+                PIECE_VALUES.get(board_copy.piece_at(sq).piece_type, 1)
+                for sq in enemy_attackers
+                if board_copy.piece_at(sq) is not None
+            )
+            if cheapest_enemy < piece_value:
+                penalty -= piece_value * 1.2
+            else:
+                penalty -= 0.2
 
-    enemy_attackers = list(board_copy.attackers(opponent_color, move.to_square))
-    if enemy_attackers:
-        cheapest_enemy = min(
-            PIECE_VALUES.get(board_copy.piece_at(sq).piece_type, 1)
-            for sq in enemy_attackers
-            if board_copy.piece_at(sq) is not None
-        )
-        if cheapest_enemy < piece_value:
-            return -(piece_value * 1.2)
+    hanging_value = hanging_material_after_move(board, move)
+    if hanging_value > 0:
+        penalty -= hanging_value * 2.0
 
-    return -0.2
+    return penalty
 
 
 def tactical_capture_score(board: chess.Board, move: chess.Move) -> float:

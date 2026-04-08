@@ -55,7 +55,9 @@ def hangs_piece_after_move(board: chess.Board, move: chess.Move) -> bool:
         enemy_attackers = list(board_copy.attackers(enemy, move.to_square))
         if enemy_attackers:
             cheapest_enemy = min(
-                get_piece_value(board_copy.piece_at(sq)) for sq in enemy_attackers if board_copy.piece_at(sq)
+                get_piece_value(board_copy.piece_at(sq))
+                for sq in enemy_attackers
+                if board_copy.piece_at(sq)
             )
             if cheapest_enemy < moved_value:
                 return True
@@ -85,3 +87,19 @@ def immediate_material_threat(board: chess.Board, color: chess.Color) -> int:
     if not hanging:
         return 0
     return max(value for _, value in hanging)
+
+
+def hanging_material_after_move(board: chess.Board, move: chess.Move) -> int:
+    board_copy = board.copy(stack=False)
+    board_copy.push(move)
+
+    mover_color = not board_copy.turn
+    hanging = find_hanging_pieces(board_copy, mover_color)
+    if not hanging:
+        return 0
+
+    return max(value for _, value in hanging)
+
+
+def leaves_piece_hanging_after_move(board: chess.Board, move: chess.Move) -> bool:
+    return hanging_material_after_move(board, move) > 0
