@@ -19,7 +19,8 @@ def get_top_moves(model, vocab, board: chess.Board, top_n: int = 3) -> List[Move
     x = board_to_tensor(board).unsqueeze(0).to(DEVICE)
     extras = board_to_extras(board).unsqueeze(0).to(DEVICE)
 
-    logits = model(x, extras).squeeze(0)
+    policy_logits, _value_pred = model(x, extras)
+    logits = policy_logits.squeeze(0)
 
     legal_moves = list(board.legal_moves)
     scored_moves = []
