@@ -19,8 +19,10 @@ MODEL_PATH = os.path.join(cfg.checkpoints_dir, "best_model.pt")
 VOCAB_PATH = cfg.vocab_path
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-TOP_K = 1
+TOP_K = 5
+REPLY_TOP_K = 3
 TEMPERATURE = 0.8
+VALUE_WEIGHT = 2.0
 
 PIECE_VALUES = {
     chess.PAWN: 1,
@@ -33,17 +35,29 @@ PIECE_VALUES = {
 
 
 def board_to_extras(board: chess.Board) -> torch.Tensor:
-    return torch.tensor(
-        [
-            1.0 if board.turn == chess.WHITE else 0.0,
-            1.0 if board.has_kingside_castling_rights(chess.WHITE) else 0.0,
-            1.0 if board.has_queenside_castling_rights(chess.WHITE) else 0.0,
-            1.0 if board.has_kingside_castling_rights(chess.BLACK) else 0.0,
-            1.0 if board.has_queenside_castling_rights(chess.BLACK) else 0.0,
-            min(board.halfmove_clock, 100) / 100.0,
-        ],
-        dtype=torch.float32,
-    )
+    """
+    Must match training-time extra features exactly.
+
+    [0] side_to_move (1 if white, 0 if black)
+    [1] white_can_castle_k
+    [2] white_can_castle_q
+    [3] black_can_castle_k
+    [4] black_can_castle_q
+    [5] en_passant_file normalized to [0..1], or 0 if none
+    """
+    side = 1.0 if board.turn == chess.WHITE else 0.0
+    wck = 1.0 if board.has_kingside_castling_rights(chess.WHITE) else 0.0
+    wcq = 1.0 if board.has_queenside_castling_rights(chess.WHITE) else 0.0
+    bck = 1.0 if board.has_kingside_castling_rights(chess.BLACK) else 0.0
+    bcq = 1.0 if board.has_queenside_castling_rights(chess.BLACK) else 0.0
+
+    ep = board.ep_square
+    if ep is None:
+        ep_file = 0.0
+    else:
+        ep_file = chess.square_file(ep) / 7.0
+
+    return torch.tensor([side, wck, wcq, bck, bcq, ep_file], dtype=torch.float32)
 
 
 def load_model():
@@ -196,26 +210,39 @@ def find_best_tactical_move(board: chess.Board) -> chess.Move | None:
 
 
 @torch.no_grad()
-def predict_legal_move(
-    model: nn.Module,
-    vocab: MoveVocab,
-    board: chess.Board,
-    top_k: int = TOP_K,
-    temperature: float = TEMPERATURE,
-) -> chess.Move:
-    tactical_move = find_best_tactical_move(board)
-    if tactical_move is not None:
-        return tactical_move
-
+def evaluate_board_value(model: nn.Module, board: chess.Board) -> float:
+    """
+    Returns value in White-centric form:
+      +1 means White is winning
+      -1 means Black is winning
+    """
     x = board_to_tensor(board).unsqueeze(0).to(DEVICE)
     extras = board_to_extras(board).unsqueeze(0).to(DEVICE)
 
-    logits = model(x, extras).squeeze(0)
+    _policy_logits, value_pred = model(x, extras)
+    return float(value_pred.item())
+
+
+@torch.no_grad()
+def get_policy_scored_legal_moves(
+    model: nn.Module,
+    vocab: MoveVocab,
+    board: chess.Board,
+) -> list[tuple[chess.Move, float]]:
+    """
+    Score legal moves using policy head + simple heuristics.
+    Returns (move, score) sorted descending.
+    """
+    x = board_to_tensor(board).unsqueeze(0).to(DEVICE)
+    extras = board_to_extras(board).unsqueeze(0).to(DEVICE)
+
+    policy_logits, _value_pred = model(x, extras)
+    logits = policy_logits.squeeze(0)
 
     legal_moves = list(board.legal_moves)
-    scored_legal_moves: list[tuple[chess.Move, float]] = []
-
     unk_idx = vocab.stoi[vocab.UNK]
+
+    scored_moves: list[tuple[chess.Move, float]] = []
 
     for move in legal_moves:
         move_idx = vocab.encode(move)
@@ -231,25 +258,112 @@ def predict_legal_move(
         if board.is_capture(move):
             score += 0.3
 
-        scored_legal_moves.append((move, score))
+        scored_moves.append((move, score))
 
-    if not scored_legal_moves:
+    if not scored_moves and legal_moves:
+        return [(move, 0.0) for move in legal_moves]
+
+    scored_moves.sort(key=lambda x: x[1], reverse=True)
+    return scored_moves
+
+
+def value_from_side_to_move_perspective(board_before_move: chess.Board, white_value: float) -> float:
+    """
+    Convert White-centric value into the perspective of the side to move
+    on board_before_move.
+    """
+    return white_value if board_before_move.turn == chess.WHITE else -white_value
+
+
+@torch.no_grad()
+def predict_legal_move(
+    model: nn.Module,
+    vocab: MoveVocab,
+    board: chess.Board,
+    top_k: int = TOP_K,
+    temperature: float = TEMPERATURE,
+) -> chess.Move:
+    # Tactical override first
+    tactical_move = find_best_tactical_move(board)
+    if tactical_move is not None:
+        return tactical_move
+
+    legal_moves = list(board.legal_moves)
+    if not legal_moves:
+        raise ValueError("No legal moves available.")
+
+    # Step 1: shortlist AI candidate moves
+    scored_moves = get_policy_scored_legal_moves(model, vocab, board)
+    if not scored_moves:
         return random.choice(legal_moves)
 
-    scored_legal_moves.sort(key=lambda x: x[1], reverse=True)
+    k = max(1, min(top_k, len(scored_moves)))
+    candidates = scored_moves[:k]
 
-    k = max(1, min(top_k, len(scored_legal_moves)))
-    candidates = scored_legal_moves[:k]
+    best_move = None
+    best_score = float("-inf")
 
-    if k == 1:
-        return candidates[0][0]
+    # Step 2: for each AI move, search a few opponent replies
+    for ai_move, ai_policy_score in candidates:
+        board_after_ai = board.copy(stack=False)
+        board_after_ai.push(ai_move)
 
-    scores = torch.tensor([score for _, score in candidates], dtype=torch.float32)
-    temperature = max(temperature, 1e-6)
-    probs = torch.softmax(scores / temperature, dim=0).tolist()
+        # Immediate checkmate is best
+        if board_after_ai.is_checkmate():
+            return ai_move
 
-    moves = [move for move, _ in candidates]
-    return random.choices(moves, weights=probs, k=1)[0]
+        # If game ends, score terminal position directly
+        if board_after_ai.is_game_over():
+            white_value = evaluate_board_value(model, board_after_ai)
+            move_score = value_from_side_to_move_perspective(board, white_value)
+            move_score += 0.25 * ai_policy_score
+
+            if move_score > best_score:
+                best_score = move_score
+                best_move = ai_move
+            continue
+
+        # Step 3: opponent best-reply shortlist
+        reply_scored_moves = get_policy_scored_legal_moves(model, vocab, board_after_ai)
+
+        if not reply_scored_moves:
+            white_value = evaluate_board_value(model, board_after_ai)
+            move_score = value_from_side_to_move_perspective(board, white_value)
+            move_score += 0.25 * ai_policy_score
+
+            if move_score > best_score:
+                best_score = move_score
+                best_move = ai_move
+            continue
+
+        reply_k = max(1, min(REPLY_TOP_K, len(reply_scored_moves)))
+        reply_candidates = reply_scored_moves[:reply_k]
+
+        # Worst-case assumption: opponent chooses the reply that hurts us most
+        worst_reply_score = float("inf")
+
+        for opp_move, _opp_policy_score in reply_candidates:
+            board_after_reply = board_after_ai.copy(stack=False)
+            board_after_reply.push(opp_move)
+
+            white_value = evaluate_board_value(model, board_after_reply)
+
+            # Convert to AI perspective from original side to move
+            ai_perspective_value = value_from_side_to_move_perspective(board, white_value)
+
+            if ai_perspective_value < worst_reply_score:
+                worst_reply_score = ai_perspective_value
+
+        combined_score = (VALUE_WEIGHT * worst_reply_score) + (0.25 * ai_policy_score)
+
+        if combined_score > best_score:
+            best_score = combined_score
+            best_move = ai_move
+
+    if best_move is None:
+        return random.choice(legal_moves)
+
+    return best_move
 
 
 def ask_user_color() -> chess.Color:
@@ -308,7 +422,10 @@ def main():
     human_color = ask_user_color()
 
     print("\nGame start.")
-    print(f"AI settings: TOP_K={TOP_K}, TEMPERATURE={TEMPERATURE}")
+    print(
+        f"AI settings: TOP_K={TOP_K}, REPLY_TOP_K={REPLY_TOP_K}, "
+        f"TEMPERATURE={TEMPERATURE}, VALUE_WEIGHT={VALUE_WEIGHT}"
+    )
     print("Board:")
     print(board)
     print()
