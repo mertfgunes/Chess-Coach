@@ -76,7 +76,8 @@ class LiveValidator:
 
     def start(self) -> None:
         if self.engine is None:
-            self.engine = chess.engine.SimpleEngine.popen_uci(self.stockfish_path)
+            command = [self.stockfish_path]
+            self.engine = chess.engine.SimpleEngine.popen_uci(command)
 
     def close(self) -> None:
         if self.engine is not None:
