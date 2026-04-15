@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import traceback
 from typing import Dict, List, Optional, Tuple
@@ -12,6 +13,7 @@ from play_against_ai import load_model, predict_legal_move
 from coach_service import ChessCoachService
 from coach_evaluation import evaluate_position
 from coach_blunder import classify_move_loss, explain_bad_move
+from live_validation import LiveValidator
 
 
 BOARD_SIZE = 8
@@ -121,7 +123,105 @@ class ChessUI:
         self.analysis_scroll_offset = 0
         self.analysis_content_height = self.analysis_viewport.height
 
+        self.validation_result = None
+        self.validator_error: Optional[str] = None
+        self.stockfish_path = self.find_stockfish_path()
+        self.live_validator: Optional[LiveValidator] = None
+
         self.load_ai_once()
+        self.setup_live_validator()
+        self.refresh_validation(force=True)
+
+    def find_stockfish_path(self) -> Optional[str]:
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        project_root = os.path.dirname(base_dir)
+
+        env_path = os.environ.get("STOCKFISH_PATH")
+        if env_path and os.path.exists(env_path):
+            return env_path
+
+        which_path = shutil.which("stockfish")
+        if which_path:
+            return which_path
+
+        which_path = shutil.which("stockfish.exe")
+        if which_path:
+            return which_path
+
+        candidates = [
+            os.path.join(project_root, "engines", "stockfish.exe"),
+            os.path.join(project_root, "engines", "stockfish"),
+            os.path.join(project_root, "bin", "stockfish.exe"),
+            os.path.join(project_root, "bin", "stockfish"),
+            r"C:\stockfish\stockfish.exe",
+            r"C:\Program Files\Stockfish\stockfish.exe",
+        ]
+
+        for path in candidates:
+            print(f"[LiveValidator] checking: {path}")
+            if os.path.exists(path):
+                print(f"[LiveValidator] found stockfish at: {path}")
+                return path
+
+        print("[LiveValidator] stockfish not found in any candidate path.")
+        return None
+    
+    def get_model_eval_for_validation(self, board: chess.Board) -> float:
+        """
+        Returns an evaluation in pawn units from White's perspective.
+        Reuses your existing coach evaluator so validation works immediately.
+        """
+        breakdown = evaluate_position(board)
+        return float(breakdown.total)
+
+    def setup_live_validator(self):
+        if not self.stockfish_path:
+            self.validator_error = "Stockfish not found. Set STOCKFISH_PATH or install Stockfish."
+            print("[LiveValidator] Stockfish path not found.")
+            return
+
+        try:
+            print(f"[LiveValidator] resolved stockfish path: {self.stockfish_path}")
+            self.live_validator = LiveValidator(
+                stockfish_path=self.stockfish_path,
+                your_eval_fn=self.get_model_eval_for_validation,
+                reference_depth=12,
+                stability_depths=[4, 8, 12],
+                stability_threshold=0.75,
+            )
+            self.live_validator.start()
+            self.validator_error = None
+            print(f"[LiveValidator] Started using: {self.stockfish_path}")
+        except Exception as e:
+            self.live_validator = None
+            self.validator_error = f"Stockfish failed to start: {e}"
+            print("[LiveValidator] Failed to start:", e)
+            traceback.print_exc()
+
+    def refresh_validation(self, force: bool = False):
+        if self.live_validator is None:
+            self.validation_result = None
+            return
+
+        try:
+            self.validation_result = self.live_validator.update(self.board, force=force)
+            if self.validation_result and self.validation_result.error_text:
+                self.validator_error = self.validation_result.error_text
+            else:
+                self.validator_error = None
+        except Exception as e:
+            self.validation_result = None
+            self.validator_error = f"Stockfish failed to start: {e}"
+            print("[LiveValidator] refresh_validation failed:", e)
+            traceback.print_exc()
+
+    def close(self):
+        if self.live_validator is not None:
+            try:
+                self.live_validator.close()
+            except Exception:
+                pass
+            self.live_validator = None
 
     def load_ai_once(self):
         try:
@@ -181,6 +281,7 @@ class ChessUI:
                 self.last_move = move
                 self.clear_selection()
                 self.update_coach_analysis()
+                self.refresh_validation(force=True)
             else:
                 self.model_error = f"Illegal AI move returned: {move.uci()}"
                 print("ERROR: Illegal AI move returned:", move.uci())
@@ -204,6 +305,7 @@ class ChessUI:
         self.game_over_message = ""
         self.latest_move_feedback = None
         self.update_coach_analysis()
+        self.refresh_validation(force=True)
 
     def choose_side(self, color: chess.Color):
         print("DEBUG: choose_side() called with", "white" if color == chess.WHITE else "black")
@@ -336,6 +438,7 @@ class ChessUI:
         self.clear_selection()
         self.update_coach_analysis()
         self.update_move_feedback(board_before, move)
+        self.refresh_validation(force=True)
         return True
 
     def update_move_feedback(self, board_before: chess.Board, played_move: chess.Move):
@@ -422,6 +525,7 @@ class ChessUI:
                     self.last_move = move
                     self.update_coach_analysis()
                     self.update_move_feedback(board_before, move)
+                    self.refresh_validation(force=True)
                 else:
                     print("ERROR: promotion move not legal:", move.uci())
 
@@ -433,6 +537,7 @@ class ChessUI:
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
+                self.close()
                 pygame.quit()
                 sys.exit()
 
@@ -494,6 +599,7 @@ class ChessUI:
 
                 if mouse_pos[0] < BOARD_SIZE * SQUARE_SIZE:
                     self.handle_board_click(mouse_pos)
+
     def load_piece_images(self) -> Dict[str, pygame.Surface]:
         images: Dict[str, pygame.Surface] = {}
 
@@ -594,7 +700,7 @@ class ChessUI:
             lines.append(current)
 
         return lines
-    
+
     def clamp_analysis_scroll(self):
         max_scroll = max(0, self.analysis_content_height - self.analysis_viewport.height)
         if self.analysis_scroll_offset < 0:
@@ -605,6 +711,70 @@ class ChessUI:
     def scroll_analysis(self, delta: int):
         self.analysis_scroll_offset += delta
         self.clamp_analysis_scroll()
+
+    def draw_validation_section(self, content_surface: pygame.Surface, y: int, content_width: int) -> int:
+        content_surface.blit(
+            self.text_font.render("Live validation", True, ACCENT),
+            (10, y),
+        )
+        y += 28
+
+        if self.validator_error:
+            for line in self.wrap_text(f"Validator: {self.validator_error}", content_width - 20)[:8]:
+                content_surface.blit(
+                    self.small_font.render(line, True, (255, 170, 170)),
+                    (10, y),
+                )
+                y += 20
+            return y
+
+        if self.validation_result is None:
+            content_surface.blit(
+                self.small_font.render("No validation yet.", True, (220, 220, 220)),
+                (10, y),
+            )
+            y += 20
+            return y
+
+        result = self.validation_result
+
+        your_eval = "None" if result.your_eval is None else f"{result.your_eval:+.2f}"
+        sf_eval = "None" if result.sf_eval is None else f"{result.sf_eval:+.2f}"
+        abs_error = "None" if result.abs_error is None else f"{result.abs_error:.2f}"
+        same_sign = "None" if result.same_sign is None else ("Yes" if result.same_sign else "No")
+        spread = "None" if result.spread is None else f"{result.spread:.2f}"
+        stable = "None" if result.stable is None else ("Yes" if result.stable else "No")
+
+        validation_lines = [
+            f"Your eval: {your_eval}",
+            f"Stockfish: {sf_eval}",
+            f"Abs error: {abs_error}",
+            f"Same side better: {same_sign}",
+            f"Depth spread: {spread}",
+            f"Stable: {stable}",
+        ]
+
+        for line in validation_lines:
+            content_surface.blit(
+                self.small_font.render(line, True, (220, 220, 220)),
+                (10, y),
+            )
+            y += 20
+
+        if result.depth_scores:
+            depth_labels = [4, 8, 12]
+            parts = []
+            for depth, value in zip(depth_labels, result.depth_scores):
+                parts.append(f"d{depth}=" + ("None" if value is None else f"{value:+.2f}"))
+
+            for line in self.wrap_text("Depths: " + ", ".join(parts), content_width - 20)[:4]:
+                content_surface.blit(
+                    self.small_font.render(line, True, (200, 200, 255)),
+                    (10, y),
+                )
+                y += 18
+
+        return y
 
     def draw_side_panel(self):
         panel_x = BOARD_SIZE * SQUARE_SIZE
@@ -624,13 +794,13 @@ class ChessUI:
         self.draw_button(self.restart_button, "Restart (R)")
         self.draw_button(self.flip_button, "Flip Board (F)")
 
-        #fixed viewport background
+        # fixed viewport background
         pygame.draw.rect(self.screen, (45, 45, 45), self.analysis_viewport, border_radius=8)
         pygame.draw.rect(self.screen, ACCENT, self.analysis_viewport, 2, border_radius=8)
 
-        #create a tall surface for scrollable content
+        # create a tall surface for scrollable content
         content_width = self.analysis_viewport.width - 12
-        content_height_guess = 2200
+        content_height_guess = 2600
         content_surface = pygame.Surface((content_width, content_height_guess))
         content_surface.fill((45, 45, 45))
 
@@ -688,6 +858,9 @@ class ChessUI:
             content_surface.blit(font.render(line, True, color), (10, y))
             y += 24 if i == 0 else 20
 
+        y += 10
+        y = self.draw_validation_section(content_surface, y, content_width)
+
         if self.latest_analysis is not None:
             y += 10
             content_surface.blit(
@@ -706,7 +879,6 @@ class ChessUI:
                 f"King safety: {self.latest_analysis.breakdown.king_safety:.2f}",
             ]
 
-            # optional extra field if you added piece_safety later
             if hasattr(self.latest_analysis.breakdown, "piece_safety"):
                 coach_lines.append(f"Piece safety: {self.latest_analysis.breakdown.piece_safety:.2f}")
 
@@ -819,10 +991,16 @@ class ChessUI:
             )
             pygame.draw.rect(self.screen, (80, 80, 80), track_rect, border_radius=3)
 
-            thumb_height = max(30, int(track_rect.height * (self.analysis_viewport.height / self.analysis_content_height)))
-            thumb_y = track_rect.y + int((track_rect.height - thumb_height) * (self.analysis_scroll_offset / max_scroll))
+            thumb_height = max(
+                30,
+                int(track_rect.height * (self.analysis_viewport.height / self.analysis_content_height)),
+            )
+            thumb_y = track_rect.y + int(
+                (track_rect.height - thumb_height) * (self.analysis_scroll_offset / max_scroll)
+            )
             thumb_rect = pygame.Rect(track_rect.x, thumb_y, track_rect.width, thumb_height)
             pygame.draw.rect(self.screen, ACCENT, thumb_rect, border_radius=3)
+
     def draw_promotion_dialog(self):
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 140))
@@ -873,30 +1051,35 @@ class ChessUI:
             self.draw_promotion_dialog()
 
     def run(self):
-        while True:
-            self.handle_events()
+        try:
+            while True:
+                self.handle_events()
 
-            if (
-                self.human_color is not None
-                and not self.board.is_game_over()
-                and self.awaiting_promotion_from is None
-                and self.board.turn == self.ai_color
-            ):
-                print(
-                    "DEBUG: AI turn condition met | human_color =",
-                    self.human_color,
-                    "| ai_color =",
-                    self.ai_color,
-                    "| board.turn =",
-                    self.board.turn,
-                )
-                self.make_ai_move()
+                if (
+                    self.human_color is not None
+                    and not self.board.is_game_over()
+                    and self.awaiting_promotion_from is None
+                    and self.board.turn == self.ai_color
+                ):
+                    print(
+                        "DEBUG: AI turn condition met | human_color =",
+                        self.human_color,
+                        "| ai_color =",
+                        self.ai_color,
+                        "| board.turn =",
+                        self.board.turn,
+                    )
+                    self.make_ai_move()
 
-            self.update_game_over_message()
-            self.draw()
+                self.update_game_over_message()
+                self.refresh_validation(force=False)
+                self.draw()
 
-            pygame.display.flip()
-            self.clock.tick(FPS)
+                pygame.display.flip()
+                self.clock.tick(FPS)
+        finally:
+            self.close()
+            pygame.quit()
 
 
 def main():
