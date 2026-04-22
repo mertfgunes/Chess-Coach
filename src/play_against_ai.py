@@ -261,7 +261,7 @@ def get_policy_scored_legal_moves(
         score += _move_safety_penalty(board, move)
 
         if board.gives_check(move):
-            score += 0.5
+            score += 0.1   # or even 0.0
 
         if board.is_capture(move):
             score += 0.3
