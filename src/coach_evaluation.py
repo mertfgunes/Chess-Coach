@@ -57,11 +57,11 @@ def evaluate_king_safety(board: chess.Board) -> float:
 
     if white_king is not None:
         white_attackers = len(board.attackers(chess.BLACK, white_king))
-        score -= white_attackers * 0.15
+        score -= white_attackers * 0.08
 
     if black_king is not None:
         black_attackers = len(board.attackers(chess.WHITE, black_king))
-        score += black_attackers * 0.15
+        score += black_attackers * 0.08
 
     return score
 

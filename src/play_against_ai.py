@@ -23,7 +23,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 TOP_K = 5
 REPLY_TOP_K = 3
 TEMPERATURE = 0.8
-VALUE_WEIGHT = 2.0
+VALUE_WEIGHT = 3.0
 
 PIECE_VALUES = {
     chess.PAWN: 1,
@@ -261,7 +261,10 @@ def get_policy_scored_legal_moves(
         score += _move_safety_penalty(board, move)
 
         if board.gives_check(move):
-            score += 0.1   # or even 0.0
+            if _is_move_safe_enough(board, move):
+                score += 0.15
+            else:
+                score -= 0.2
 
         if board.is_capture(move):
             score += 0.3
