@@ -13,6 +13,7 @@ from encoding import board_to_tensor
 from model import PolicyCNN
 from train import TrainConfig
 from coach_tactics import hanging_material_after_move
+from coach_tactics import hanging_material_after_move, is_likely_recaptured
 
 
 cfg = TrainConfig()
@@ -253,12 +254,14 @@ def get_policy_scored_legal_moves(
 
         if board.gives_check(move):
             if _is_move_safe_enough(board, move):
-                score += 0.15
+                score += 0.03
             else:
-                score -= 0.2
-
+                score -= 0.4
         if board.is_capture(move):
-            score += 0.3
+            if is_likely_recaptured(board, move):
+                score += 0.05
+            else:
+                score += 0.25
 
         scored_moves.append((move, score))
 

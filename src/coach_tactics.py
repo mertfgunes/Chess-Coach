@@ -96,3 +96,14 @@ def hanging_material_after_move(board: chess.Board, move: chess.Move) -> int:
 
 def leaves_piece_hanging_after_move(board: chess.Board, move: chess.Move) -> bool:
     return hanging_material_after_move(board, move) > 0
+
+def is_likely_recaptured(board: chess.Board, move: chess.Move) -> bool:
+    board_copy = board.copy(stack=False)
+    board_copy.push(move)
+
+    moved_piece = board_copy.piece_at(move.to_square)
+    if moved_piece is None:
+        return False
+
+    opponent = board_copy.turn
+    return board_copy.is_attacked_by(opponent, move.to_square)
