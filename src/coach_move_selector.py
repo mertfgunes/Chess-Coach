@@ -8,7 +8,11 @@ from coach_models import MoveSuggestion
 from coach_evaluation import evaluate_position
 from encoding import board_to_tensor
 from play_against_ai import board_to_extras, DEVICE
-from coach_tactics import hangs_piece_after_move, hanging_material_after_move, leaves_piece_hanging_after_move
+from coach_tactics import (
+    hangs_piece_after_move,
+    hanging_material_after_move,
+    leaves_piece_hanging_after_move,
+)
 
 
 @torch.no_grad()
@@ -19,7 +23,7 @@ def get_top_moves(model, vocab, board: chess.Board, top_n: int = 3) -> List[Move
     x = board_to_tensor(board).unsqueeze(0).to(DEVICE)
     extras = board_to_extras(board).unsqueeze(0).to(DEVICE)
 
-    policy_logits, _value_pred = model(x, extras)
+    policy_logits, _ = model(x, extras)
     logits = policy_logits.squeeze(0)
 
     legal_moves = list(board.legal_moves)
@@ -41,51 +45,37 @@ def get_top_moves(model, vocab, board: chess.Board, top_n: int = 3) -> List[Move
         eval_score = evaluate_position(board_copy).total
 
         tactical_penalty = 0.0
+
+        # moved piece unsafe
         if hangs_piece_after_move(board, move):
             tactical_penalty -= 2.5
-
+        
+        # global hanging penalty
         hanging_value = hanging_material_after_move(board, move)
         if hanging_value > 0:
-            tactical_penalty -= 1.5 * hanging_value
+            tactical_penalty -= 2.0 * hanging_value
 
         final_score = eval_score + tactical_penalty
+
         scored_moves.append((move, san, policy_score, final_score))
 
-    if not scored_moves:
-        fallback = []
-        for move in legal_moves[:top_n]:
-            board_copy = board.copy(stack=False)
-            san = board.san(move)
-            board_copy.push(move)
-            eval_score = evaluate_position(board_copy).total
-
-            fallback.append(
-                MoveSuggestion(
-                    move=move,
-                    san=san,
-                    score=round(eval_score, 2),
-                    explanation="Legal fallback move.",
-                    tags=[],
-                )
-            )
-        return fallback
-
     if board.turn == chess.WHITE:
-        scored_moves.sort(key=lambda item: (item[3], item[2]), reverse=True)
+        scored_moves.sort(key=lambda x: (x[3], x[2]), reverse=True)
     else:
-        scored_moves.sort(key=lambda item: (item[3], item[2]))
+        scored_moves.sort(key=lambda x: (x[3], x[2]))
 
     result: List[MoveSuggestion] = []
 
-    for move, san, _policy_score, final_score in scored_moves[:top_n]:
+    for move, san, _, final_score in scored_moves[:top_n]:
         tags = []
 
         if board.is_capture(move):
             tags.append("capture")
         if board.gives_check(move):
             tags.append("check")
-        if move.promotion is not None:
+        if move.promotion:
             tags.append("promotion")
+
         if hangs_piece_after_move(board, move) or leaves_piece_hanging_after_move(board, move):
             tags.append("unsafe")
 
@@ -94,7 +84,6 @@ def get_top_moves(model, vocab, board: chess.Board, top_n: int = 3) -> List[Move
                 move=move,
                 san=san,
                 score=round(final_score, 2),
-                explanation="",
                 tags=tags,
             )
         )

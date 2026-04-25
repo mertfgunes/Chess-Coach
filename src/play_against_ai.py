@@ -12,6 +12,7 @@ from move_vocab import MoveVocab
 from encoding import board_to_tensor
 from model import PolicyCNN
 from train import TrainConfig
+from coach_tactics import hanging_material_after_move
 
 
 cfg = TrainConfig()
@@ -144,24 +145,14 @@ def _move_safety_penalty(board: chess.Board, move: chess.Move) -> float:
     if attacked and not defended:
         penalty -= piece_value * 2.5
     elif attacked:
-        enemy_attackers = list(board_copy.attackers(opponent_color, move.to_square))
-        if enemy_attackers:
-            cheapest_enemy = min(
-                PIECE_VALUES.get(board_copy.piece_at(sq).piece_type, 1)
-                for sq in enemy_attackers
-                if board_copy.piece_at(sq) is not None
-            )
-            if cheapest_enemy < piece_value:
-                penalty -= piece_value * 1.2
-            else:
-                penalty -= 0.2
+        penalty -= 0.3
 
+    # global hanging penalty
     hanging_value = hanging_material_after_move(board, move)
     if hanging_value > 0:
         penalty -= hanging_value * 2.0
 
     return penalty
-
 
 def tactical_capture_score(board: chess.Board, move: chess.Move) -> float:
     if not board.is_capture(move):

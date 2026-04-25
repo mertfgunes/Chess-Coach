@@ -26,13 +26,6 @@ def defenders_count(board: chess.Board, square: int, color: chess.Color) -> int:
     return len(board.attackers(color, square))
 
 
-def is_square_overloaded(board: chess.Board, square: int, color: chess.Color) -> bool:
-    enemy = not color
-    defenders = defenders_count(board, square, color)
-    attackers = attackers_count(board, square, enemy)
-    return attackers > defenders
-
-
 def hangs_piece_after_move(board: chess.Board, move: chess.Move) -> bool:
     board_copy = board.copy(stack=False)
     board_copy.push(move)
