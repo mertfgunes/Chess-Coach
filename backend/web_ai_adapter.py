@@ -13,9 +13,10 @@ BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(BACKEND_DIR)
 SRC_DIR = os.path.join(ROOT_DIR, "src")
 
+os.chdir(ROOT_DIR)
+
 if SRC_DIR not in sys.path:
     sys.path.append(SRC_DIR)
-
 # Fallback values if real AI cannot load
 PIECE_VALUES_CP = {
     chess.PAWN: 100,
