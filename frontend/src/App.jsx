@@ -25,12 +25,26 @@ function App() {
   const [status, setStatus] = useState("Your move.");
   const [difficulty, setDifficulty] = useState("medium");
   const [evaluation, setEvaluation] = useState(null);
+  const [coachMessage, setCoachMessage] = useState("No coach advice yet.");
+  const [lastAiMove, setLastAiMove] = useState(null);
+  const [aiStatus, setAiStatus] = useState(null);
 
   const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
   const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
 
+  function updateAiStatus(data) {
+    if (data && data.ai_status) {
+      setAiStatus(data.ai_status);
+    }
+  }
+
   function handleSquareClick(square) {
     const gameCopy = new Chess(game.fen());
+
+    if (gameCopy.isGameOver()) {
+      setStatus("Game is over. Press Reset to start again.");
+      return;
+    }
 
     if (!selectedSquare) {
       const piece = gameCopy.get(square);
@@ -40,7 +54,7 @@ function App() {
       }
 
       if (piece.color !== gameCopy.turn()) {
-        setStatus("Select your own piece.");
+        setStatus("Select the side whose turn it is.");
         return;
       }
 
@@ -63,7 +77,8 @@ function App() {
 
     setGame(gameCopy);
     setSelectedSquare(null);
-    setStatus("You moved. Click Ask AI Move.");
+    setLastAiMove(null);
+    setStatus(`You played ${move.san}. Click Ask AI Move.`);
   }
 
   async function askAiMove() {
@@ -77,18 +92,19 @@ function App() {
         },
         body: JSON.stringify({
           fen: game.fen(),
-          difficulty: difficulty,
+          difficulty,
         }),
       });
 
       const data = await response.json();
+      updateAiStatus(data);
 
       if (data.error) {
         setStatus(data.error);
         return;
       }
 
-      if (data.game_over) {
+      if (data.game_over && !data.move) {
         setStatus(`Game over: ${data.result}`);
         return;
       }
@@ -96,9 +112,15 @@ function App() {
       const gameCopy = new Chess(data.fen_after);
       setGame(gameCopy);
       setSelectedSquare(null);
-      setStatus(`AI played: ${data.move}`);
+      setLastAiMove(data.move_san || data.move);
+
+      if (data.game_over) {
+        setStatus(`AI played ${data.move_san || data.move}. Game over: ${data.result}`);
+      } else {
+        setStatus(`AI played ${data.move_san || data.move}. Your move.`);
+      }
     } catch {
-      setStatus("Could not connect to backend.");
+      setStatus("Could not connect to backend. Make sure python backend/app.py is running.");
     }
   }
 
@@ -117,6 +139,7 @@ function App() {
       });
 
       const data = await response.json();
+      updateAiStatus(data);
 
       if (data.error) {
         setStatus(data.error);
@@ -126,7 +149,52 @@ function App() {
       setEvaluation(data.evaluation);
       setStatus("Evaluation updated.");
     } catch {
-      setStatus("Could not connect to backend.");
+      setStatus("Could not connect to backend. Make sure python backend/app.py is running.");
+    }
+  }
+
+  async function getCoachAdvice() {
+    setStatus("Coach is thinking...");
+
+    try {
+      const response = await fetch(`${API_URL}/coach`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          fen: game.fen(),
+          difficulty,
+        }),
+      });
+
+      const data = await response.json();
+      updateAiStatus(data);
+
+      if (data.error) {
+        setStatus(data.error);
+        return;
+      }
+
+      setEvaluation(data.evaluation);
+      setCoachMessage(data.message);
+      setStatus("Coach advice updated.");
+    } catch {
+      setStatus("Could not connect to backend. Make sure python backend/app.py is running.");
+    }
+  }
+
+  async function checkBackendStatus() {
+    setStatus("Checking backend...");
+
+    try {
+      const response = await fetch(`${API_URL}/status`);
+      const data = await response.json();
+
+      setAiStatus(data);
+      setStatus("Backend status updated.");
+    } catch {
+      setStatus("Backend is not reachable.");
     }
   }
 
@@ -135,6 +203,8 @@ function App() {
     setSelectedSquare(null);
     setStatus("New game started.");
     setEvaluation(null);
+    setCoachMessage("No coach advice yet.");
+    setLastAiMove(null);
   }
 
   function renderBoard() {
@@ -153,9 +223,12 @@ function App() {
               isSelected ? "selected" : ""
             }`}
             onClick={() => handleSquareClick(square)}
+            title={square}
           >
             <span className={piece?.color === "w" ? "white-piece" : "black-piece"}>
-              {piece ? pieceSymbols[piece.color === "w" ? piece.type.toUpperCase() : piece.type] : ""}
+              {piece
+                ? pieceSymbols[piece.color === "w" ? piece.type.toUpperCase() : piece.type]
+                : ""}
             </span>
           </button>
         );
@@ -163,12 +236,42 @@ function App() {
     );
   }
 
+  function getTurnText() {
+    return game.turn() === "w" ? "White to move" : "Black to move";
+  }
+
+  function getGameStateText() {
+    if (game.isCheckmate()) {
+      return "Checkmate";
+    }
+
+    if (game.isStalemate()) {
+      return "Stalemate";
+    }
+
+    if (game.isDraw()) {
+      return "Draw";
+    }
+
+    if (game.inCheck()) {
+      return `${getTurnText()} - check`;
+    }
+
+    return getTurnText();
+  }
+
   return (
     <div className="app">
       <div className="container">
         <section className="board-section">
-          <h1>Chess Coach</h1>
-          <p>Click a piece, then click the target square.</p>
+          <div className="header-row">
+            <div>
+              <h1>Chess Coach</h1>
+              <p>Click a piece, then click the target square.</p>
+            </div>
+
+            <div className="turn-pill">{getGameStateText()}</div>
+          </div>
 
           <div className="custom-board">{renderBoard()}</div>
         </section>
@@ -195,6 +298,14 @@ function App() {
             Evaluate Position
           </button>
 
+          <button type="button" onClick={getCoachAdvice}>
+            Get Coach Advice
+          </button>
+
+          <button type="button" onClick={checkBackendStatus}>
+            Check Backend Status
+          </button>
+
           <button type="button" className="secondary" onClick={resetGame}>
             Reset
           </button>
@@ -205,12 +316,38 @@ function App() {
           </div>
 
           <div className="box">
+            <h3>Last AI Move</h3>
+            <p>{lastAiMove || "No AI move yet."}</p>
+          </div>
+
+          <div className="box">
             <h3>Evaluation</h3>
             <p>
               {evaluation === null
                 ? "No evaluation yet."
-                : `${evaluation} centipawns`}
+                : `${Number(evaluation).toFixed(2)} ${
+                    Math.abs(evaluation) > 20 ? "points" : "score"
+                  }`}
             </p>
+          </div>
+
+          <div className="box coach-box">
+            <h3>Coach Advice</h3>
+            <p>{coachMessage}</p>
+          </div>
+
+          <div className="box">
+            <h3>AI Status</h3>
+            {aiStatus ? (
+              <ul className="status-list">
+                <li>Real AI: {aiStatus.real_ai_available ? "Available" : "Unavailable"}</li>
+                <li>Model loaded: {aiStatus.model_loaded ? "Yes" : "No"}</li>
+                <li>Real eval: {aiStatus.real_eval_available ? "Available" : "Unavailable"}</li>
+                {aiStatus.ai_error ? <li className="error-text">{aiStatus.ai_error}</li> : null}
+              </ul>
+            ) : (
+              <p>Not checked yet.</p>
+            )}
           </div>
 
           <div className="box">

@@ -18,7 +18,7 @@ body {
 
 .container {
   width: 100%;
-  max-width: 1120px;
+  max-width: 1180px;
   background: white;
   border-radius: 24px;
   padding: 28px;
@@ -28,6 +28,13 @@ body {
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.12);
 }
 
+.header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
 h1 {
   margin: 0;
   font-size: 44px;
@@ -35,6 +42,15 @@ h1 {
 
 .board-section p {
   color: #555;
+}
+
+.turn-pill {
+  background: #222;
+  color: white;
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  white-space: nowrap;
 }
 
 .custom-board {
@@ -88,6 +104,12 @@ h1 {
   border-radius: 18px;
   padding: 20px;
   border: 1px solid #e8e8e8;
+  max-height: 760px;
+  overflow-y: auto;
+}
+
+.panel h2 {
+  margin-top: 0;
 }
 
 label {
@@ -135,12 +157,32 @@ select {
 
 .box h3 {
   margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.box p {
+  margin-bottom: 0;
+}
+
+.coach-box {
+  border-color: #222;
 }
 
 .fen {
   font-size: 12px;
   word-break: break-word;
   color: #555;
+}
+
+.status-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+}
+
+.error-text {
+  color: #b00020;
+  word-break: break-word;
 }
 
 @media (max-width: 900px) {
@@ -152,6 +194,10 @@ select {
     padding: 16px;
   }
 
+  .header-row {
+    flex-direction: column;
+  }
+
   .custom-board {
     width: 90vw;
     height: 90vw;
@@ -161,5 +207,9 @@ select {
 
   .square {
     font-size: 34px;
+  }
+
+  .panel {
+    max-height: none;
   }
 }
