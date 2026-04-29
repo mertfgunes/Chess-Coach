@@ -7,14 +7,15 @@ import chess
 import torch
 import torch.nn as nn
 
-from coach_tactics import hanging_material_after_move
+from coach_tactics import (
+    hanging_material_after_move,
+    is_likely_recaptured,
+    static_exchange_evaluation,
+)
 from move_vocab import MoveVocab
 from encoding import board_to_tensor
 from model import PolicyCNN
 from train import TrainConfig
-from coach_tactics import hanging_material_after_move
-from coach_tactics import hanging_material_after_move, is_likely_recaptured
-
 
 cfg = TrainConfig()
 
@@ -55,10 +56,7 @@ def board_to_extras(board: chess.Board) -> torch.Tensor:
     bcq = 1.0 if board.has_queenside_castling_rights(chess.BLACK) else 0.0
 
     ep = board.ep_square
-    if ep is None:
-        ep_file = 0.0
-    else:
-        ep_file = chess.square_file(ep) / 7.0
+    ep_file = chess.square_file(ep) / 7.0 if ep is not None else 0.0
 
     return torch.tensor([side, wck, wcq, bck, bcq, ep_file], dtype=torch.float32)
 
@@ -66,7 +64,6 @@ def board_to_extras(board: chess.Board) -> torch.Tensor:
 def load_model():
     if not os.path.exists(VOCAB_PATH):
         raise FileNotFoundError(f"Vocab file not found: {VOCAB_PATH}")
-
     if not os.path.exists(MODEL_PATH):
         raise FileNotFoundError(f"Checkpoint file not found: {MODEL_PATH}")
 
@@ -79,146 +76,141 @@ def load_model():
     ).to(DEVICE)
 
     checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
-
-    if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-        state_dict = checkpoint["model_state_dict"]
-    else:
-        state_dict = checkpoint
-
+    state_dict = (
+        checkpoint["model_state_dict"]
+        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint
+        else checkpoint
+    )
     model.load_state_dict(state_dict)
     model.eval()
 
     return model, vocab
 
 
-def _captured_piece_type(board: chess.Board, move: chess.Move) -> int | None:
-    captured_piece = board.piece_at(move.to_square)
+# ---------------------------------------------------------------------------
+# SEE-based safety helpers
+# ---------------------------------------------------------------------------
 
-    if captured_piece is not None:
-        return captured_piece.piece_type
-
-    if board.is_en_passant(move):
-        return chess.PAWN
-
-    return None
+def _see_score(board: chess.Board, move: chess.Move) -> int:
+    """
+    Wrapper around SEE.  For non-captures returns 0.
+    Positive = the moving side gains material.
+    """
+    return static_exchange_evaluation(board, move)
 
 
 def _is_move_safe_enough(board: chess.Board, move: chess.Move) -> bool:
+    """
+    A move is considered 'safe enough' when:
+      - If it is a capture: SEE >= 0  (we don't lose material in the exchange)
+      - If it is not a capture: the moved piece does not end up newly hanging
+    """
+    if board.is_capture(move):
+        return _see_score(board, move) >= 0
+
+    # Non-capture: check if the piece lands on a square where opponent wins
     board_copy = board.copy(stack=False)
     board_copy.push(move)
+    opponent = board_copy.turn
+    if not board_copy.is_attacked_by(opponent, move.to_square):
+        return True
 
-    moved_piece = board_copy.piece_at(move.to_square)
-    if moved_piece is None:
-        return False
+    # Simulate an opponent capture from the new position
+    from coach_tactics import _least_valuable_attacker
+    atk_sq, _ = _least_valuable_attacker(board_copy, move.to_square, opponent)
+    if atk_sq is None:
+        return True
 
-    opponent_color = board_copy.turn
-    mover_color = not opponent_color
-
-    attacked = board_copy.is_attacked_by(opponent_color, move.to_square)
-    defended = board_copy.is_attacked_by(mover_color, move.to_square)
-
-    if attacked and not defended:
-        return False
-
-    if hanging_material_after_move(board, move) > 0:
-        return False
-
-    return True
+    recapture = chess.Move(atk_sq, move.to_square)
+    return static_exchange_evaluation(board_copy, recapture) < 0  # opponent loses
 
 
 def _move_safety_penalty(board: chess.Board, move: chess.Move) -> float:
-    board_copy = board.copy(stack=False)
-    board_copy.push(move)
+    """
+    Returns a penalty (negative float, in policy-logit units) for moves
+    that lose material.  Uses SEE for captures and hanging detection for
+    quiet moves, so the penalty is proportional to how much material is lost.
+    """
+    if board.is_capture(move):
+        see = _see_score(board, move)
+        if see < 0:
+            # Losing capture — penalty proportional to material lost
+            return float(see) * 1.5
+        return 0.0  # winning or even capture — no penalty
 
-    moved_piece = board_copy.piece_at(move.to_square)
-    if moved_piece is None:
-        return -100.0
-
-    opponent_color = board_copy.turn
-    mover_color = not opponent_color
-
-    attacked = board_copy.is_attacked_by(opponent_color, move.to_square)
-    defended = board_copy.is_attacked_by(mover_color, move.to_square)
-
-    penalty = 0.0
-    piece_value = PIECE_VALUES.get(moved_piece.piece_type, 1)
-
-    if attacked and not defended:
-        penalty -= piece_value * 2.5
-    elif attacked:
-        penalty -= 0.3
-
-    # global hanging penalty
+    # Quiet move: penalise if it leaves a piece newly hanging
     hanging_value = hanging_material_after_move(board, move)
     if hanging_value > 0:
-        penalty -= hanging_value * 2.0
+        return -float(hanging_value) * 2.0
 
-    return penalty
+    return 0.0
 
-def tactical_capture_score(board: chess.Board, move: chess.Move) -> float:
+
+# ---------------------------------------------------------------------------
+# Tactical override: find a clearly winning capture
+# ---------------------------------------------------------------------------
+
+def _tactical_capture_score(board: chess.Board, move: chess.Move) -> float:
+    """
+    Score a capture move for the tactical override.
+    Based purely on SEE so we don't double-count policy scores.
+    Returns -inf for non-captures.
+    """
     if not board.is_capture(move):
         return float("-inf")
 
-    attacker = board.piece_at(move.from_square)
-    if attacker is None:
-        return float("-inf")
+    see = _see_score(board, move)
+    if see <= 0:
+        return float("-inf")  # even or losing capture — skip tactical override
 
-    captured_type = _captured_piece_type(board, move)
-    if captured_type is None:
-        return float("-inf")
+    # Scale by material gain; add small bonus for higher-value captures
+    captured = board.piece_at(move.to_square)
+    captured_val = PIECE_VALUES.get(captured.piece_type, 0) if captured else PIECE_VALUES[chess.PAWN]
 
-    attacker_value = PIECE_VALUES.get(attacker.piece_type, 0)
-    captured_value = PIECE_VALUES.get(captured_type, 0)
-
-    safe_after_capture = _is_move_safe_enough(board, move)
-
-    score = 0.0
-    score += captured_value * 20
-    score += (captured_value - attacker_value) * 8
-
-    if safe_after_capture:
-        score += 25
-    else:
-        score -= attacker_value * 6
-
-    if captured_type == chess.QUEEN:
-        score += 120
-    elif captured_type == chess.ROOK:
-        score += 50
-    elif captured_type in (chess.BISHOP, chess.KNIGHT):
-        score += 20
-
-    return score
+    return float(see * 10 + captured_val)
 
 
 def find_best_tactical_move(board: chess.Board) -> chess.Move | None:
+    """
+    Returns a clearly winning capture (SEE > 0) if one exists, else None.
+    We only override the neural network if we are unambiguously winning
+    material — avoids the old bug where a losing queen capture scored +300.
+    """
     legal_moves = list(board.legal_moves)
-    capture_moves = [move for move in legal_moves if board.is_capture(move)]
-
+    capture_moves = [m for m in legal_moves if board.is_capture(m)]
     if not capture_moves:
         return None
 
-    scored_moves = [(move, tactical_capture_score(board, move)) for move in capture_moves]
-    scored_moves.sort(key=lambda x: x[1], reverse=True)
+    scored = [
+        (m, _tactical_capture_score(board, m))
+        for m in capture_moves
+    ]
+    scored = [(m, s) for m, s in scored if s > float("-inf")]
+    if not scored:
+        return None
 
-    best_move, best_score = scored_moves[0]
+    scored.sort(key=lambda x: x[1], reverse=True)
+    best_move, best_score = scored[0]
 
-    if best_score >= 35:
+    # Require a meaningful material gain (at least 1 pawn equivalent via SEE)
+    if _see_score(board, best_move) >= 1:
         return best_move
 
     return None
 
 
+# ---------------------------------------------------------------------------
+# Policy scoring
+# ---------------------------------------------------------------------------
+
 @torch.no_grad()
 def evaluate_board_value(model: nn.Module, board: chess.Board) -> float:
     """
     Returns value in White-centric form:
-      +1 means White is winning
-      -1 means Black is winning
+      +1 White is winning, -1 Black is winning.
     """
     x = board_to_tensor(board).unsqueeze(0).to(DEVICE)
     extras = board_to_extras(board).unsqueeze(0).to(DEVICE)
-
     _policy_logits, value_pred = model(x, extras)
     return float(value_pred.item())
 
@@ -230,8 +222,8 @@ def get_policy_scored_legal_moves(
     board: chess.Board,
 ) -> list[tuple[chess.Move, float]]:
     """
-    Score legal moves using policy head + simple heuristics.
-    Returns (move, score) sorted descending.
+    Score legal moves using policy head + SEE-based safety adjustments.
+    Returns (move, score) sorted descending (higher = better for side to move).
     """
     x = board_to_tensor(board).unsqueeze(0).to(DEVICE)
     extras = board_to_extras(board).unsqueeze(0).to(DEVICE)
@@ -241,7 +233,6 @@ def get_policy_scored_legal_moves(
 
     legal_moves = list(board.legal_moves)
     unk_idx = vocab.stoi[vocab.UNK]
-
     scored_moves: list[tuple[chess.Move, float]] = []
 
     for move in legal_moves:
@@ -250,35 +241,52 @@ def get_policy_scored_legal_moves(
             continue
 
         score = float(logits[move_idx].item())
+
+        # --- Safety penalty (SEE-based) ---
         score += _move_safety_penalty(board, move)
 
+        # --- Check bonus: tiny and only when the check is also SEE-safe ---
+        # A check is only a bonus if:
+        #   (a) it is a safe capture (SEE >= 0), or
+        #   (b) it is a quiet move that doesn't leave us hanging
+        # We intentionally keep this bonus small so the model's own
+        # evaluation drives move choice, not a hard-coded check bonus.
         if board.gives_check(move):
             if _is_move_safe_enough(board, move):
-                score += 0.03
+                score += 0.05   # tiny nudge — check is safe but not inherently great
             else:
-                score -= 0.4
+                score -= 0.5    # unsafe check is actively penalised
+
+        # --- Capture bonus proportional to SEE gain ---
+        # Replaces the old flat +0.25 bonus that didn't account for recaptures.
         if board.is_capture(move):
-            if is_likely_recaptured(board, move):
-                score += 0.05
-            else:
-                score += 0.25
+            see = _see_score(board, move)
+            if see > 0:
+                # Winning capture — small bonus scaled by gain (capped to avoid over-weighting)
+                score += min(see * 0.15, 1.0)
+            elif see < 0:
+                # Already penalised by _move_safety_penalty; no further bonus
+                pass
+            # see == 0: even exchange — no bonus, no penalty
 
         scored_moves.append((move, score))
 
     if not scored_moves and legal_moves:
-        return [(move, 0.0) for move in legal_moves]
+        return [(m, 0.0) for m in legal_moves]
 
     scored_moves.sort(key=lambda x: x[1], reverse=True)
     return scored_moves
 
 
-def value_from_side_to_move_perspective(board_before_move: chess.Board, white_value: float) -> float:
-    """
-    Convert White-centric value into the perspective of the side to move
-    on board_before_move.
-    """
+def value_from_side_to_move_perspective(
+    board_before_move: chess.Board, white_value: float
+) -> float:
     return white_value if board_before_move.turn == chess.WHITE else -white_value
 
+
+# ---------------------------------------------------------------------------
+# Main move prediction
+# ---------------------------------------------------------------------------
 
 @torch.no_grad()
 def predict_legal_move(
@@ -288,7 +296,7 @@ def predict_legal_move(
     top_k: int = TOP_K,
     temperature: float = TEMPERATURE,
 ) -> chess.Move:
-    # Tactical override first
+    # Tactical override: only when SEE confirms a clear material gain
     tactical_move = find_best_tactical_move(board)
     if tactical_move is not None:
         return tactical_move
@@ -297,7 +305,7 @@ def predict_legal_move(
     if not legal_moves:
         raise ValueError("No legal moves available.")
 
-    # Step 1: shortlist AI candidate moves
+    # Step 1: shortlist candidate moves via policy + safety adjustments
     scored_moves = get_policy_scored_legal_moves(model, vocab, board)
     if not scored_moves:
         return random.choice(legal_moves)
@@ -308,21 +316,20 @@ def predict_legal_move(
     best_move = None
     best_score = float("-inf")
 
-    # Step 2: for each AI move, search a few opponent replies
+    # Step 2: for each candidate, simulate opponent best replies
     for ai_move, ai_policy_score in candidates:
         board_after_ai = board.copy(stack=False)
         board_after_ai.push(ai_move)
 
-        # Immediate checkmate is best
+        # Immediate checkmate is always best
         if board_after_ai.is_checkmate():
             return ai_move
 
-        # If game ends, score terminal position directly
+        # Terminal position (stalemate, draw, etc.)
         if board_after_ai.is_game_over():
             white_value = evaluate_board_value(model, board_after_ai)
             move_score = value_from_side_to_move_perspective(board, white_value)
             move_score += 0.25 * ai_policy_score
-
             if move_score > best_score:
                 best_score = move_score
                 best_move = ai_move
@@ -335,7 +342,6 @@ def predict_legal_move(
             white_value = evaluate_board_value(model, board_after_ai)
             move_score = value_from_side_to_move_perspective(board, white_value)
             move_score += 0.25 * ai_policy_score
-
             if move_score > best_score:
                 best_score = move_score
                 best_move = ai_move
@@ -344,7 +350,7 @@ def predict_legal_move(
         reply_k = max(1, min(REPLY_TOP_K, len(reply_scored_moves)))
         reply_candidates = reply_scored_moves[:reply_k]
 
-        # Worst-case assumption: opponent chooses the reply that hurts us most
+        # Pessimistic assumption: opponent picks the reply that hurts us most
         worst_reply_score = float("inf")
 
         for opp_move, _opp_policy_score in reply_candidates:
@@ -352,12 +358,10 @@ def predict_legal_move(
             board_after_reply.push(opp_move)
 
             white_value = evaluate_board_value(model, board_after_reply)
+            ai_perspective = value_from_side_to_move_perspective(board, white_value)
 
-            # Convert to AI perspective from original side to move
-            ai_perspective_value = value_from_side_to_move_perspective(board, white_value)
-
-            if ai_perspective_value < worst_reply_score:
-                worst_reply_score = ai_perspective_value
+            if ai_perspective < worst_reply_score:
+                worst_reply_score = ai_perspective
 
         combined_score = (VALUE_WEIGHT * worst_reply_score) + (0.25 * ai_policy_score)
 
@@ -365,11 +369,12 @@ def predict_legal_move(
             best_score = combined_score
             best_move = ai_move
 
-    if best_move is None:
-        return random.choice(legal_moves)
+    return best_move if best_move is not None else random.choice(legal_moves)
 
-    return best_move
 
+# ---------------------------------------------------------------------------
+# CLI helpers
+# ---------------------------------------------------------------------------
 
 def ask_user_color() -> chess.Color:
     while True:
@@ -384,19 +389,15 @@ def ask_user_color() -> chess.Color:
 def ask_user_move(board: chess.Board) -> chess.Move:
     while True:
         user_input = input("Your move (UCI like e2e4, or 'quit'): ").strip().lower()
-
         if user_input in {"quit", "exit"}:
             raise SystemExit("Game ended.")
-
         try:
             move = chess.Move.from_uci(user_input)
         except ValueError:
             print("Invalid move format. Use UCI format like e2e4 or g1f3.")
             continue
-
         if move in board.legal_moves:
             return move
-
         print("Illegal move. Try again.")
 
 
@@ -404,7 +405,6 @@ def print_game_result(board: chess.Board):
     print("\nFinal board:")
     print(board)
     print()
-
     if board.is_checkmate():
         winner = "Black" if board.turn == chess.WHITE else "White"
         print(f"Checkmate. {winner} wins.")
@@ -423,7 +423,6 @@ def print_game_result(board: chess.Board):
 def main():
     model, vocab = load_model()
     board = chess.Board()
-
     human_color = ask_user_color()
 
     print("\nGame start.")
@@ -431,9 +430,7 @@ def main():
         f"AI settings: TOP_K={TOP_K}, REPLY_TOP_K={REPLY_TOP_K}, "
         f"TEMPERATURE={TEMPERATURE}, VALUE_WEIGHT={VALUE_WEIGHT}"
     )
-    print("Board:")
     print(board)
-    print()
 
     while not board.is_game_over():
         print("-" * 50)
