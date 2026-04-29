@@ -29,8 +29,17 @@ function App() {
   const [lastAiMove, setLastAiMove] = useState(null);
   const [aiStatus, setAiStatus] = useState(null);
 
+  // New loading states
+  const [isAiThinking, setIsAiThinking] = useState(false);
+  const [isEvaluating, setIsEvaluating] = useState(false);
+  const [isCoachThinking, setIsCoachThinking] = useState(false);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+
   const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
   const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
+
+  const isBusy =
+    isAiThinking || isEvaluating || isCoachThinking || isCheckingStatus;
 
   function updateAiStatus(data) {
     if (data && data.ai_status) {
@@ -39,6 +48,11 @@ function App() {
   }
 
   function handleSquareClick(square) {
+    if (isBusy) {
+      setStatus("Please wait until the current action finishes.");
+      return;
+    }
+
     const gameCopy = new Chess(game.fen());
 
     if (gameCopy.isGameOver()) {
@@ -82,6 +96,16 @@ function App() {
   }
 
   async function askAiMove() {
+    if (isBusy) {
+      return;
+    }
+
+    if (game.isGameOver()) {
+      setStatus("Game is already over. Press Reset to start again.");
+      return;
+    }
+
+    setIsAiThinking(true);
     setStatus("AI is thinking...");
 
     try {
@@ -115,16 +139,27 @@ function App() {
       setLastAiMove(data.move_san || data.move);
 
       if (data.game_over) {
-        setStatus(`AI played ${data.move_san || data.move}. Game over: ${data.result}`);
+        setStatus(
+          `AI played ${data.move_san || data.move}. Game over: ${data.result}`
+        );
       } else {
         setStatus(`AI played ${data.move_san || data.move}. Your move.`);
       }
     } catch {
-      setStatus("Could not connect to backend. Make sure python backend/app.py is running.");
+      setStatus(
+        "Could not connect to backend. Make sure python backend/app.py is running."
+      );
+    } finally {
+      setIsAiThinking(false);
     }
   }
 
   async function evaluatePosition() {
+    if (isBusy) {
+      return;
+    }
+
+    setIsEvaluating(true);
     setStatus("Evaluating...");
 
     try {
@@ -149,11 +184,20 @@ function App() {
       setEvaluation(data.evaluation);
       setStatus("Evaluation updated.");
     } catch {
-      setStatus("Could not connect to backend. Make sure python backend/app.py is running.");
+      setStatus(
+        "Could not connect to backend. Make sure python backend/app.py is running."
+      );
+    } finally {
+      setIsEvaluating(false);
     }
   }
 
   async function getCoachAdvice() {
+    if (isBusy) {
+      return;
+    }
+
+    setIsCoachThinking(true);
     setStatus("Coach is thinking...");
 
     try {
@@ -180,11 +224,20 @@ function App() {
       setCoachMessage(data.message);
       setStatus("Coach advice updated.");
     } catch {
-      setStatus("Could not connect to backend. Make sure python backend/app.py is running.");
+      setStatus(
+        "Could not connect to backend. Make sure python backend/app.py is running."
+      );
+    } finally {
+      setIsCoachThinking(false);
     }
   }
 
   async function checkBackendStatus() {
+    if (isBusy) {
+      return;
+    }
+
+    setIsCheckingStatus(true);
     setStatus("Checking backend...");
 
     try {
@@ -195,10 +248,17 @@ function App() {
       setStatus("Backend status updated.");
     } catch {
       setStatus("Backend is not reachable.");
+    } finally {
+      setIsCheckingStatus(false);
     }
   }
 
   function resetGame() {
+    if (isBusy) {
+      setStatus("Please wait until the current action finishes.");
+      return;
+    }
+
     setGame(new Chess());
     setSelectedSquare(null);
     setStatus("New game started.");
@@ -221,13 +281,16 @@ function App() {
             type="button"
             className={`square ${isLight ? "light" : "dark"} ${
               isSelected ? "selected" : ""
-            }`}
+            } ${isBusy ? "board-disabled" : ""}`}
             onClick={() => handleSquareClick(square)}
             title={square}
+            disabled={isBusy}
           >
             <span className={piece?.color === "w" ? "white-piece" : "black-piece"}>
               {piece
-                ? pieceSymbols[piece.color === "w" ? piece.type.toUpperCase() : piece.type]
+                ? pieceSymbols[
+                    piece.color === "w" ? piece.type.toUpperCase() : piece.type
+                  ]
                 : ""}
             </span>
           </button>
@@ -270,7 +333,7 @@ function App() {
               <p>Click a piece, then click the target square.</p>
             </div>
 
-            <div className="turn-pill">{getGameStateText()}</div>
+            <div className="turn-pill">{isBusy ? "Working..." : getGameStateText()}</div>
           </div>
 
           <div className="custom-board">{renderBoard()}</div>
@@ -284,29 +347,35 @@ function App() {
             id="difficulty"
             value={difficulty}
             onChange={(e) => setDifficulty(e.target.value)}
+            disabled={isBusy}
           >
             <option value="easy">Easy</option>
             <option value="medium">Medium</option>
             <option value="hard">Hard</option>
           </select>
 
-          <button type="button" onClick={askAiMove}>
-            Ask AI Move
+          <button type="button" onClick={askAiMove} disabled={isBusy}>
+            {isAiThinking ? "AI Thinking..." : "Ask AI Move"}
           </button>
 
-          <button type="button" onClick={evaluatePosition}>
-            Evaluate Position
+          <button type="button" onClick={evaluatePosition} disabled={isBusy}>
+            {isEvaluating ? "Evaluating..." : "Evaluate Position"}
           </button>
 
-          <button type="button" onClick={getCoachAdvice}>
-            Get Coach Advice
+          <button type="button" onClick={getCoachAdvice} disabled={isBusy}>
+            {isCoachThinking ? "Coach Thinking..." : "Get Coach Advice"}
           </button>
 
-          <button type="button" onClick={checkBackendStatus}>
-            Check Backend Status
+          <button type="button" onClick={checkBackendStatus} disabled={isBusy}>
+            {isCheckingStatus ? "Checking..." : "Check Backend Status"}
           </button>
 
-          <button type="button" className="secondary" onClick={resetGame}>
+          <button
+            type="button"
+            className="secondary"
+            onClick={resetGame}
+            disabled={isBusy}
+          >
             Reset
           </button>
 
@@ -340,10 +409,17 @@ function App() {
             <h3>AI Status</h3>
             {aiStatus ? (
               <ul className="status-list">
-                <li>Real AI: {aiStatus.real_ai_available ? "Available" : "Unavailable"}</li>
+                <li>
+                  Real AI: {aiStatus.real_ai_available ? "Available" : "Unavailable"}
+                </li>
                 <li>Model loaded: {aiStatus.model_loaded ? "Yes" : "No"}</li>
-                <li>Real eval: {aiStatus.real_eval_available ? "Available" : "Unavailable"}</li>
-                {aiStatus.ai_error ? <li className="error-text">{aiStatus.ai_error}</li> : null}
+                <li>
+                  Real eval:{" "}
+                  {aiStatus.real_eval_available ? "Available" : "Unavailable"}
+                </li>
+                {aiStatus.ai_error ? (
+                  <li className="error-text">{aiStatus.ai_error}</li>
+                ) : null}
               </ul>
             ) : (
               <p>Not checked yet.</p>
