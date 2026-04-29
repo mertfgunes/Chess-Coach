@@ -12,11 +12,14 @@ from coach_tactics import (
     hangs_piece_after_move,
     hanging_material_after_move,
     leaves_piece_hanging_after_move,
+    static_exchange_evaluation,
 )
 
 
 @torch.no_grad()
-def get_top_moves(model, vocab, board: chess.Board, top_n: int = 3) -> List[MoveSuggestion]:
+def get_top_moves(
+    model, vocab, board: chess.Board, top_n: int = 3
+) -> List[MoveSuggestion]:
     if model is None or vocab is None:
         return []
 
@@ -27,9 +30,8 @@ def get_top_moves(model, vocab, board: chess.Board, top_n: int = 3) -> List[Move
     logits = policy_logits.squeeze(0)
 
     legal_moves = list(board.legal_moves)
-    scored_moves = []
-
     unk_idx = vocab.stoi[vocab.UNK]
+    scored_moves = []
 
     for move in legal_moves:
         idx = vocab.encode(move)
@@ -42,15 +44,26 @@ def get_top_moves(model, vocab, board: chess.Board, top_n: int = 3) -> List[Move
         san = board.san(move)
         board_copy.push(move)
 
-        eval_score = evaluate_position(board_copy).total
+        # evaluate_position returns a White-centric score; we convert it
+        # to the perspective of the side to move so that sorting is correct
+        # for both White AND Black.
+        raw_eval = evaluate_position(board_copy).total
+        eval_score = raw_eval if board.turn == chess.WHITE else -raw_eval
 
         tactical_penalty = 0.0
 
-        # moved piece unsafe
-        if hangs_piece_after_move(board, move):
-            tactical_penalty -= 2.5
-        
-        # global hanging penalty
+        # SEE-based capture penalty/bonus — replaces the old flat bonuses
+        if board.is_capture(move):
+            see = static_exchange_evaluation(board, move)
+            if see < 0:
+                # Losing capture: penalise proportionally
+                tactical_penalty += see * 1.5
+            elif see > 0:
+                # Winning capture: small reward
+                tactical_penalty += min(see * 0.15, 1.0)
+            # Even capture (see == 0): no adjustment
+
+        # Hanging penalty only for *newly* hanging pieces (SEE-aware)
         hanging_value = hanging_material_after_move(board, move)
         if hanging_value > 0:
             tactical_penalty -= 2.0 * hanging_value
@@ -59,10 +72,10 @@ def get_top_moves(model, vocab, board: chess.Board, top_n: int = 3) -> List[Move
 
         scored_moves.append((move, san, policy_score, final_score))
 
-    if board.turn == chess.WHITE:
-        scored_moves.sort(key=lambda x: (x[3], x[2]), reverse=True)
-    else:
-        scored_moves.sort(key=lambda x: (x[3], x[2]))
+    # Sort descending by (final_score, policy_score) for BOTH colours.
+    # eval_score is already in side-to-move perspective, so higher is always
+    # better regardless of colour — no more ascending sort for Black.
+    scored_moves.sort(key=lambda x: (x[3], x[2]), reverse=True)
 
     result: List[MoveSuggestion] = []
 
@@ -70,9 +83,17 @@ def get_top_moves(model, vocab, board: chess.Board, top_n: int = 3) -> List[Move
         tags = []
 
         if board.is_capture(move):
-            tags.append("capture")
+            see = static_exchange_evaluation(board, move)
+            if see > 0:
+                tags.append("winning capture")
+            elif see == 0:
+                tags.append("even capture")
+            else:
+                tags.append("losing capture")
+
         if board.gives_check(move):
             tags.append("check")
+
         if move.promotion:
             tags.append("promotion")
 
