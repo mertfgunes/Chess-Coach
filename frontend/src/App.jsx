@@ -69,6 +69,8 @@ function App() {
     summary: "Ask the coach for a focused plan in the current position.",
     explanation: "",
     points: ["Look for forcing moves, loose pieces, and king safety."],
+    themes: [],
+    training: null,
   });
   const [lastAiMove, setLastAiMove] = useState(null);
   const [lastMove, setLastMove] = useState(null);
@@ -76,6 +78,9 @@ function App() {
   const [aiStatus, setAiStatus] = useState(null);
   const [autoReply, setAutoReply] = useState(true);
   const [endGameModal, setEndGameModal] = useState(null);
+  const [coachMode, setCoachMode] = useState("explain");
+  const [showTrainingAnswer, setShowTrainingAnswer] = useState(false);
+  const [lessonMemory, setLessonMemory] = useState({});
 
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
@@ -94,6 +99,7 @@ function App() {
 
   useEffect(() => {
     refreshBackendStatus({ quiet: true });
+    getCoachAdvice(game, { allowBusy: true, quiet: true });
   }, []);
 
   function updateAiStatus(data) {
@@ -116,6 +122,8 @@ function App() {
   function applyCoachData(data) {
     if (!data) return;
 
+    const themes = Array.isArray(data.coach_themes) ? data.coach_themes : [];
+
     setEvaluation(data.evaluation);
     setCoachMessage(data.message || "");
     setCoachInsight({
@@ -123,7 +131,20 @@ function App() {
       summary: data.coach_summary || data.message || "No summary available.",
       explanation: data.coach_explanation || "",
       points: Array.isArray(data.coach_points) ? data.coach_points : [],
+      themes,
+      training: data.training_prompt || null,
     });
+    setShowTrainingAnswer(false);
+
+    if (themes.length) {
+      setLessonMemory((memory) => {
+        const next = { ...memory };
+        themes.forEach((theme) => {
+          next[theme] = (next[theme] || 0) + 1;
+        });
+        return next;
+      });
+    }
   }
 
   function buildEndGameModalData(finalGame, data = {}) {
@@ -228,6 +249,8 @@ function App() {
 
     if (autoReply) {
       askAiMove(gameCopy);
+    } else {
+      getCoachAdvice(gameCopy, { allowBusy: true, quiet: true });
     }
   }
 
@@ -288,6 +311,7 @@ function App() {
         setEndGameModal(buildEndGameModalData(gameCopy, data));
       } else {
         setStatus(`AI played ${data.move_san || data.move}. Your move.`);
+        getCoachAdvice(gameCopy, { allowBusy: true, quiet: true });
       }
     } catch {
       setStatus("Backend is not reachable. Start the Flask server first.");
@@ -334,7 +358,9 @@ function App() {
     if (isBusy && !options.allowBusy) return;
 
     setIsCoachThinking(true);
-    setStatus(options.finalGame ? "Explaining the final position..." : "Preparing coach advice...");
+    if (!options.quiet) {
+      setStatus(options.finalGame ? "Explaining the final position..." : "Preparing coach advice...");
+    }
 
     try {
       const response = await fetch(`${API_URL}/coach`, {
@@ -360,7 +386,9 @@ function App() {
       if (options.finalGame && sourceGame.isGameOver()) {
         setEndGameModal(buildEndGameModalData(sourceGame, data));
       }
-      setStatus(options.finalGame ? "Final explanation ready." : "Coach advice updated.");
+      if (!options.quiet) {
+        setStatus(options.finalGame ? "Final explanation ready." : "Coach advice updated.");
+      }
     } catch {
       setStatus("Backend is not reachable. Start the Flask server first.");
     } finally {
@@ -414,11 +442,15 @@ function App() {
       summary: "Ask the coach for a focused plan in the current position.",
       explanation: "",
       points: ["Look for forcing moves, loose pieces, and king safety."],
+      themes: [],
+      training: null,
     });
     setLastAiMove(null);
     setLastMove(null);
     setMoveHistory([]);
     setEndGameModal(null);
+    setShowTrainingAnswer(false);
+    setLessonMemory({});
   }
 
   function renderBoard() {
@@ -514,22 +546,54 @@ function App() {
           <section className="coach-stage">
             <div className="coach-stage-header">
               <span>Coach</span>
-              <button type="button" onClick={() => getCoachAdvice()} disabled={isBusy}>
-                {isCoachThinking ? "Analyzing..." : "Explain this position"}
+              <small>{isCoachThinking ? "Updating..." : "Updates automatically"}</small>
+            </div>
+            <div className="coach-mode-tabs">
+              <button
+                type="button"
+                className={coachMode === "explain" ? "active" : ""}
+                onClick={() => setCoachMode("explain")}
+              >
+                Explain
+              </button>
+              <button
+                type="button"
+                className={coachMode === "train" ? "active" : ""}
+                onClick={() => setCoachMode("train")}
+              >
+                Train me
               </button>
             </div>
             <h2>{coachInsight.title}</h2>
-            <p>{coachInsight.summary}</p>
-            {coachInsight.explanation ? (
-              <p className="coach-explanation">{coachInsight.explanation}</p>
-            ) : null}
-            {coachInsight.points.length ? (
-              <ul className="coach-points">
-                {coachInsight.points.map((point) => (
-                  <li key={point}>{point}</li>
-                ))}
-              </ul>
-            ) : null}
+            {coachMode === "train" && coachInsight.training ? (
+              <div className="training-card">
+                <span>{coachInsight.training.theme}</span>
+                <p>{coachInsight.training.question}</p>
+                <small>{coachInsight.training.hint}</small>
+                {coachInsight.training.task ? <em>{coachInsight.training.task}</em> : null}
+                {showTrainingAnswer ? (
+                  <strong>{coachInsight.training.answer}</strong>
+                ) : (
+                  <button type="button" onClick={() => setShowTrainingAnswer(true)}>
+                    Reveal answer
+                  </button>
+                )}
+              </div>
+            ) : (
+              <>
+                <p>{coachInsight.summary}</p>
+                {coachInsight.explanation ? (
+                  <p className="coach-explanation">{coachInsight.explanation}</p>
+                ) : null}
+                {coachInsight.points.length ? (
+                  <ul className="coach-points">
+                    {coachInsight.points.map((point) => (
+                      <li key={point}>{point}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </>
+            )}
           </section>
 
           <div className="table-strip">
@@ -591,15 +655,6 @@ function App() {
                 Reset game
               </button>
             </div>
-
-            <button
-              type="button"
-              className="coach-button"
-              onClick={() => getCoachAdvice()}
-              disabled={isBusy}
-            >
-              {isCoachThinking ? "Coach is analyzing..." : "Get coach explanation"}
-            </button>
           </section>
 
           <section className="info-block">
@@ -620,6 +675,25 @@ function App() {
               </ol>
             ) : (
               <p>No moves yet.</p>
+            )}
+          </section>
+
+          <section className="info-block">
+            <h3>Learning Patterns</h3>
+            {Object.keys(lessonMemory).length ? (
+              <ol className="memory-list">
+                {Object.entries(lessonMemory)
+                  .sort((a, b) => b[1] - a[1])
+                  .slice(0, 4)
+                  .map(([theme, count]) => (
+                    <li key={theme}>
+                      <span>{theme}</span>
+                      <strong>{count}</strong>
+                    </li>
+                  ))}
+              </ol>
+            ) : (
+              <p>Ask the coach a few times to see recurring lesson themes.</p>
             )}
           </section>
 

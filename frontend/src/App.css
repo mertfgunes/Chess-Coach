@@ -380,19 +380,10 @@ h3 {
   text-transform: uppercase;
 }
 
-.coach-stage-header button,
-.coach-button {
-  border: 0;
-  border-radius: 6px;
-  background: #2f6f73;
-  color: #fff;
-  cursor: pointer;
-  font-weight: 900;
-}
-
-.coach-stage-header button {
-  min-height: 38px;
-  padding: 8px 13px;
+.coach-stage-header small {
+  color: #65717d;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .coach-stage h2 {
@@ -400,6 +391,34 @@ h3 {
   font-size: 22px;
   line-height: 1.18;
   margin-bottom: 8px;
+}
+
+.coach-mode-tabs {
+  display: inline-grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 4px;
+  border: 1px solid #d7dee3;
+  border-radius: 8px;
+  background: #edf1f3;
+}
+
+.coach-mode-tabs button {
+  min-height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #596570;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 900;
+  padding: 6px 12px;
+}
+
+.coach-mode-tabs button.active {
+  background: #2f6f73;
+  color: #fff;
 }
 
 .coach-stage p {
@@ -437,6 +456,54 @@ h3 {
   height: 7px;
   border-radius: 50%;
   background: #2f6f73;
+}
+
+.training-card {
+  display: grid;
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid #cfe0dc;
+  border-radius: 8px;
+  background: #f4fbf8;
+}
+
+.training-card span {
+  color: #2f6f73;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.training-card small {
+  color: #65717d;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.training-card em {
+  color: #2d353d;
+  font-size: 13px;
+  font-style: normal;
+  line-height: 1.4;
+}
+
+.training-card strong {
+  color: #13272a;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.training-card button {
+  justify-self: start;
+  min-height: 36px;
+  border: 0;
+  border-radius: 6px;
+  background: #2f6f73;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 8px 12px;
 }
 
 .table-strip span {
@@ -478,8 +545,7 @@ h3 {
 }
 
 .segmented button,
-.button-grid button,
-.coach-button {
+.button-grid button {
   border: 0;
   border-radius: 6px;
   cursor: pointer;
@@ -520,29 +586,19 @@ h3 {
   gap: 8px;
 }
 
-.button-grid button,
-.coach-button {
+.button-grid button {
   background: #26323c;
   color: #fff;
   min-height: 42px;
   padding: 9px 10px;
 }
 
-.button-grid button:hover:not(:disabled),
-.coach-button:hover:not(:disabled),
-.coach-stage-header button:hover:not(:disabled) {
+.button-grid button:hover:not(:disabled) {
   background: #111920;
 }
 
 button:disabled {
   opacity: 0.55;
-}
-
-.coach-button {
-  width: 100%;
-  min-height: 50px;
-  margin-top: 8px;
-  background: #2f6f73;
 }
 
 .info-block {
@@ -579,10 +635,43 @@ button:disabled {
 }
 
 .move-list span,
+.memory-list span,
 .engine-list dt {
   color: #65717d;
   font-size: 12px;
   font-weight: 800;
+}
+
+.memory-list {
+  display: grid;
+  gap: 7px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.memory-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid #eef1f3;
+  padding-bottom: 6px;
+}
+
+.memory-list span {
+  text-transform: capitalize;
+}
+
+.memory-list strong {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  min-height: 26px;
+  border-radius: 999px;
+  background: #edf1f3;
+  color: #26323c;
+  font-size: 13px;
 }
 
 .move-list strong {
