@@ -48,6 +48,18 @@ except Exception as e:
     print(f"[Web AI] Could not import real AI: {e}")
 
 try:
+    from coach_tactics import hanging_material_after_move, static_exchange_evaluation
+except Exception:
+    def hanging_material_after_move(board: chess.Board, move: chess.Move) -> int:
+        return 0
+
+    def static_exchange_evaluation(board: chess.Board, move: chess.Move) -> int:
+        captured = board.piece_at(move.to_square)
+        if captured is None:
+            return 0
+        return PIECE_VALUES_CP.get(captured.piece_type, 0) // 100
+
+try:
     from coach_evaluation import evaluate_position as real_evaluate_position
 
     REAL_EVAL_AVAILABLE = True
@@ -188,11 +200,12 @@ def fallback_ai_move(board: chess.Board, difficulty: str = "medium") -> Optional
         # If Black is choosing, lower is better.
         adjusted_score = score if board.turn == chess.WHITE else -score
 
-        # Small bonus for captures
         if board.is_capture(move):
-            adjusted_score += 30
+            adjusted_score += static_exchange_evaluation(board, move) * 90
 
-        # Very small check bonus, not huge
+        hanging_value = hanging_material_after_move(board, move)
+        adjusted_score -= hanging_value * 120
+
         if board.gives_check(move):
             adjusted_score += 5
 
@@ -215,7 +228,7 @@ def get_ai_move(board: chess.Board, difficulty: str = "medium") -> Optional[ches
 
     if model is not None and vocab is not None:
         try:
-            move = predict_legal_move(model, vocab, board)
+            move = predict_legal_move(model, vocab, board, difficulty=difficulty)
 
             if isinstance(move, str):
                 move = chess.Move.from_uci(move)
