@@ -28,6 +28,8 @@ const difficultyCopy = {
   hard: "Sharp",
 };
 
+const captureOrder = ["q", "r", "b", "n", "p"];
+
 function formatEvaluation(evaluation) {
   if (evaluation === null || Number.isNaN(Number(evaluation))) {
     return "No eval";
@@ -61,6 +63,12 @@ function getGameResult(finalGame) {
     return finalGame.turn() === "w" ? "0-1" : "1-0";
   }
   return "1/2-1/2";
+}
+
+function getCapturedPieceSymbol(piece) {
+  if (!piece) return "";
+  const symbolKey = piece.color === "w" ? piece.type.toUpperCase() : piece.type;
+  return pieceSymbols[symbolKey] || "";
 }
 
 function App() {
@@ -105,6 +113,27 @@ function App() {
     );
   }, [game, selectedSquare]);
 
+  const capturedPieces = useMemo(() => {
+    const pieces = {
+      white: [],
+      black: [],
+    };
+
+    moveHistory.forEach((move) => {
+      if (!move.captured) return;
+      const owner = move.captured.color === "b" ? "white" : "black";
+      pieces[owner].push(move.captured);
+    });
+
+    Object.values(pieces).forEach((sidePieces) => {
+      sidePieces.sort(
+        (a, b) => captureOrder.indexOf(a.type) - captureOrder.indexOf(b.type)
+      );
+    });
+
+    return pieces;
+  }, [moveHistory]);
+
   useEffect(() => {
     refreshBackendStatus({ quiet: true });
     getCoachAdvice(game, { allowBusy: true, quiet: true });
@@ -135,10 +164,19 @@ function App() {
   }
 
   function moveRecord(actor, move) {
+    const capturedColor =
+      move.captured && move.color ? (move.color === "w" ? "b" : "w") : null;
+
     return {
       actor,
       san: move.san || move.move_san || move.uci || move.move,
       uci: move.uci || move.move,
+      captured: move.captured
+        ? {
+            color: capturedColor || (actor === "You" ? "b" : "w"),
+            type: move.captured,
+          }
+        : null,
     };
   }
 
@@ -390,11 +428,25 @@ function App() {
         return;
       }
 
+      const aiPreview = new Chess(sourceGame.fen());
+      let previewMove = null;
+      try {
+        previewMove = aiPreview.move({
+          from: data.move?.slice(0, 2),
+          to: data.move?.slice(2, 4),
+          promotion: data.move?.slice(4, 5) || "q",
+        });
+      } catch {
+        previewMove = null;
+      }
       const gameCopy = new Chess(data.fen_after);
-      const aiMoveRecord = moveRecord("AI", {
-        san: data.move_san || data.move,
-        uci: data.move,
-      });
+      const aiMoveRecord = moveRecord(
+        "AI",
+        previewMove || {
+          san: data.move_san || data.move,
+          uci: data.move,
+        }
+      );
       const nextMoveHistory = [...sourceHistory, aiMoveRecord];
 
       setGame(gameCopy);
@@ -597,6 +649,25 @@ function App() {
     );
   }
 
+  function renderCapturedTray(label, pieces, tone) {
+    return (
+      <aside className={`captured-tray ${tone}`}>
+        <span>{label}</span>
+        <div className="captured-pieces">
+          {pieces.length ? (
+            pieces.map((piece, index) => (
+              <strong key={`${piece.color}-${piece.type}-${index}`}>
+                {getCapturedPieceSymbol(piece)}
+              </strong>
+            ))
+          ) : (
+            <em>None</em>
+          )}
+        </div>
+      </aside>
+    );
+  }
+
   function getGameStateText() {
     if (game.isCheckmate()) return "Checkmate";
     if (game.isStalemate()) return "Stalemate";
@@ -666,7 +737,11 @@ function App() {
           </div>
 
           <div className="board-wrap">
-            <div className="custom-board">{renderBoard()}</div>
+            <div className="board-layout">
+              {renderCapturedTray("White took", capturedPieces.white, "white-captures")}
+              <div className="custom-board">{renderBoard()}</div>
+              {renderCapturedTray("AI took", capturedPieces.black, "black-captures")}
+            </div>
           </div>
 
           <section className="coach-stage">
