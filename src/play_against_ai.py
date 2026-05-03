@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import os
 import random
+from pathlib import Path
 
 import chess
 import torch
 import torch.nn as nn
 
+from coach_evaluation import evaluate_position
 from coach_tactics import (
     hanging_material_after_move,
     static_exchange_evaluation,
@@ -14,18 +16,20 @@ from coach_tactics import (
 from move_vocab import MoveVocab
 from encoding import board_to_tensor
 from model import PolicyCNN
-from train import TrainConfig
 
 
-cfg = TrainConfig()
-
-MODEL_PATH = os.path.join(cfg.checkpoints_dir, "best_model.pt")
-VOCAB_PATH = cfg.vocab_path
+ROOT_DIR = Path(__file__).resolve().parents[1]
+MODEL_PATH = ROOT_DIR / "checkpoints" / "best_model.pt"
+VOCAB_PATH = ROOT_DIR / "data" / "move_vocab.txt"
+DEFAULT_CHANNELS = 128
+DEFAULT_DROPOUT = 0.1
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Smaller top-k and lower temperature = stronger / less random.
-TOP_K = 4
-TEMPERATURE = 0.55
+# Wider candidate lists let the model generate ideas while the chess logic
+# rejects obvious tactics that fail on the next move.
+TOP_K = 12
+TEMPERATURE = 0.35
+CANDIDATE_POOL = 24
 
 PIECE_VALUES = {
     chess.PAWN: 1,
@@ -64,21 +68,31 @@ def load_model():
     """
     Loads the trained policy/value model and move vocabulary.
     """
-    if not os.path.exists(VOCAB_PATH):
-        raise FileNotFoundError(f"Vocab file not found: {VOCAB_PATH}")
+    vocab_path = Path(os.environ.get("CHESS_COACH_VOCAB_PATH", VOCAB_PATH))
+    model_path = Path(os.environ.get("CHESS_COACH_MODEL_PATH", MODEL_PATH))
 
-    if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(f"Checkpoint file not found: {MODEL_PATH}")
+    if not vocab_path.is_absolute():
+        vocab_path = ROOT_DIR / vocab_path
+    if not model_path.is_absolute():
+        model_path = ROOT_DIR / model_path
 
-    vocab = MoveVocab.load(VOCAB_PATH)
+    if not vocab_path.exists():
+        raise FileNotFoundError(f"Vocab file not found: {vocab_path}")
+
+    if not model_path.exists():
+        raise FileNotFoundError(f"Checkpoint file not found: {model_path}")
+
+    vocab = MoveVocab.load(str(vocab_path))
+    checkpoint = torch.load(model_path, map_location=DEVICE)
+    checkpoint_cfg = checkpoint.get("config", {}) if isinstance(checkpoint, dict) else {}
+    channels = int(checkpoint_cfg.get("channels", DEFAULT_CHANNELS))
+    dropout = float(checkpoint_cfg.get("dropout", DEFAULT_DROPOUT))
 
     model = PolicyCNN(
         vocab_size=len(vocab),
-        channels=cfg.channels,
-        dropout=cfg.dropout,
+        channels=channels,
+        dropout=dropout,
     ).to(DEVICE)
-
-    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
 
     state_dict = (
         checkpoint["model_state_dict"]
@@ -86,7 +100,15 @@ def load_model():
         else checkpoint
     )
 
-    model.load_state_dict(state_dict)
+    try:
+        model.load_state_dict(state_dict)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            "Checkpoint does not match the current model architecture. "
+            f"Loaded config channels={channels}, dropout={dropout}, "
+            f"vocab_size={len(vocab)} from {model_path}."
+        ) from exc
+
     model.eval()
 
     return model, vocab
@@ -326,6 +348,122 @@ def value_from_side_to_move_perspective(
     return white_value if board_before_move.turn == chess.WHITE else -white_value
 
 
+def heuristic_score_for_color(board: chess.Board, color: chess.Color) -> float:
+    """
+    Position score in pawn units from one side's perspective.
+
+    Mate scores are intentionally much larger than normal eval terms so the
+    selector never ignores checkmate or walks into it for a material nibble.
+    """
+    if board.is_checkmate():
+        return -100.0 if board.turn == color else 100.0
+
+    if board.is_stalemate() or board.is_insufficient_material():
+        return 0.0
+
+    white_score = evaluate_position(board).total
+    return white_score if color == chess.WHITE else -white_score
+
+
+def opponent_reply_penalty(
+    board_after_move: chess.Board,
+    mover_color: chess.Color,
+    reply_limit: int = 12,
+) -> float:
+    """
+    Estimate how much the opponent can damage the move on the next ply.
+
+    This is the key strength upgrade: captures and checks are no longer judged
+    only by their immediate appearance. If the opponent has a strong recapture
+    or tactic, this penalty pulls the candidate down.
+    """
+    if board_after_move.is_game_over():
+        return 0.0
+
+    current_score = heuristic_score_for_color(board_after_move, mover_color)
+    replies = list(board_after_move.legal_moves)
+
+    if not replies:
+        return 0.0
+
+    def reply_priority(reply: chess.Move) -> float:
+        priority = 0.0
+        if board_after_move.is_capture(reply):
+            priority += 4.0 + max(0, static_exchange_evaluation(board_after_move, reply))
+        if board_after_move.gives_check(reply):
+            priority += 1.0
+        return priority
+
+    replies.sort(key=reply_priority, reverse=True)
+    worst_drop = 0.0
+
+    for reply in replies[:reply_limit]:
+        reply_board = board_after_move.copy(stack=False)
+        reply_board.push(reply)
+        reply_score = heuristic_score_for_color(reply_board, mover_color)
+        worst_drop = max(worst_drop, current_score - reply_score)
+
+    return worst_drop
+
+
+def search_adjustment_for_move(
+    board: chess.Board,
+    move: chess.Move,
+    reply_limit: int,
+) -> float:
+    mover_color = board.turn
+    board_after = board.copy(stack=False)
+    board_after.push(move)
+
+    if board_after.is_checkmate():
+        return 100.0
+
+    position_score = heuristic_score_for_color(board_after, mover_color)
+    reply_penalty = opponent_reply_penalty(
+        board_after,
+        mover_color,
+        reply_limit=reply_limit,
+    )
+
+    return position_score - (0.85 * reply_penalty)
+
+
+def difficulty_settings(difficulty: str | None) -> dict[str, float | int | bool]:
+    level = (difficulty or "medium").lower()
+
+    if level == "easy":
+        return {
+            "top_k": 8,
+            "candidate_pool": 14,
+            "temperature": 0.85,
+            "reply_limit": 5,
+            "search_weight": 0.35,
+            "random_chance": 0.18,
+            "deterministic": False,
+        }
+
+    if level == "hard":
+        return {
+            "top_k": 1,
+            "candidate_pool": 32,
+            "temperature": 0.05,
+            "reply_limit": 18,
+            "search_weight": 1.15,
+            "random_chance": 0.0,
+            "deterministic": True,
+        }
+
+    return {
+        "top_k": TOP_K,
+        "candidate_pool": CANDIDATE_POOL,
+        "temperature": TEMPERATURE,
+        "reply_limit": 12,
+        "search_weight": 0.75,
+        "random_chance": 0.04,
+        "deterministic": False,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main move prediction
 # ---------------------------------------------------------------------------
@@ -337,39 +475,61 @@ def predict_legal_move(
     board: chess.Board,
     top_k: int = TOP_K,
     temperature: float = TEMPERATURE,
+    difficulty: str | None = "medium",
 ) -> chess.Move:
     """
     Predicts one legal AI move.
 
-    New approach:
-    - Model remains the main decision-maker.
-    - SEE only gives light safety adjustments.
-    - Opening bonus gives small early-game guidance.
-    - No hard tactical override.
-    - No heavy opponent-reply search.
-    - No strong value-head weighting.
+    The model generates candidate moves; python-chess filters legality; then a
+    shallow reply check and exchange safety rerank the strongest candidates.
     """
     legal_moves = list(board.legal_moves)
 
     if not legal_moves:
         raise ValueError("No legal moves available.")
 
+    settings = difficulty_settings(difficulty)
+    if top_k == TOP_K:
+        top_k = int(settings["top_k"])
+    if temperature == TEMPERATURE:
+        temperature = float(settings["temperature"])
+
     scored_moves = get_policy_scored_legal_moves(model, vocab, board)
 
     if not scored_moves:
         return random.choice(legal_moves)
 
-    k = max(1, min(top_k, len(scored_moves)))
-    candidates = scored_moves[:k]
+    pool_size = max(1, min(int(settings["candidate_pool"]), len(scored_moves)))
+    search_weight = float(settings["search_weight"])
+    reply_limit = int(settings["reply_limit"])
+    reranked: list[tuple[chess.Move, float]] = []
 
-    if len(candidates) == 1:
+    for move, policy_score in scored_moves[:pool_size]:
+        search_score = search_adjustment_for_move(
+            board,
+            move,
+            reply_limit=reply_limit,
+        )
+        final_score = policy_score + (search_weight * search_score)
+        reranked.append((move, final_score))
+
+    reranked.sort(key=lambda item: item[1], reverse=True)
+
+    if random.random() < float(settings["random_chance"]):
+        weaker_pool = reranked[: max(1, min(6, len(reranked)))]
+        return random.choice(weaker_pool)[0]
+
+    k = max(1, min(top_k, len(reranked)))
+    candidates = reranked[:k]
+
+    if len(candidates) == 1 or bool(settings["deterministic"]):
         return candidates[0][0]
 
     best_score = candidates[0][1]
     second_score = candidates[1][1]
 
     # If the best move is clearly better, play it.
-    if best_score - second_score >= 1.25:
+    if best_score - second_score >= 0.85:
         return candidates[0][0]
 
     # Otherwise sample between the top candidate moves.
