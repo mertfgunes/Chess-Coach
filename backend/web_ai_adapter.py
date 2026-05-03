@@ -296,11 +296,184 @@ def evaluation_summary(evaluation: float) -> str:
     return "The position is roughly equal."
 
 
-def build_coach_points(board: chess.Board, analysis, suggested_move_san: Optional[str]) -> list[str]:
+def move_plan_description(board: chess.Board, move: Optional[chess.Move]) -> str:
+    if move is None:
+        return "There is no single move to recommend in this finished position."
+
+    piece = board.piece_at(move.from_square)
+    piece_name = piece_name_for(piece) if piece else "piece"
+    target = chess.square_name(move.to_square)
+
+    if board.is_capture(move):
+        see = static_exchange_evaluation(board, move)
+        if see > 0:
+            return f"It uses the {piece_name} to capture on {target}, and the exchange sequence wins material."
+        if see == 0:
+            return f"It captures on {target}, but the follow-up exchange stays balanced."
+        return f"It captures on {target}, but the exchange needs care because recaptures can punish it."
+
+    if board.is_castling(move):
+        return "It puts the king safer and connects the rooks, which makes the position easier to play."
+
+    if board.gives_check(move):
+        return "It gives check, but the important part is whether the position after the check stays safe."
+
+    if piece and piece.piece_type in {chess.KNIGHT, chess.BISHOP}:
+        return f"It develops the {piece_name} to {target}, improving activity without forcing a risky exchange."
+
+    if piece and piece.piece_type == chess.PAWN and move.to_square in {chess.D4, chess.E4, chess.D5, chess.E5}:
+        return f"It takes central space on {target}, giving your pieces better squares next."
+
+    return f"It improves the {piece_name} on {target} while keeping the position tactically stable."
+
+
+def piece_name_for(piece: Optional[chess.Piece]) -> str:
+    if piece is None:
+        return "piece"
+    names = {
+        chess.PAWN: "pawn",
+        chess.KNIGHT: "knight",
+        chess.BISHOP: "bishop",
+        chess.ROOK: "rook",
+        chess.QUEEN: "queen",
+        chess.KING: "king",
+    }
+    return names.get(piece.piece_type, "piece")
+
+
+def best_opponent_reply_note(board: chess.Board, move: Optional[chess.Move]) -> Optional[str]:
+    if move is None:
+        return None
+
+    board_after = board.copy(stack=False)
+    board_after.push(move)
+
+    if board_after.is_game_over():
+        return "There is no reply because the move ends the game."
+
+    best_reply = None
+    best_score = -999.0
+
+    for reply in board_after.legal_moves:
+        reply_score = 0.0
+        if board_after.is_capture(reply):
+            reply_score += 3.0 + static_exchange_evaluation(board_after, reply)
+        if board_after.gives_check(reply):
+            reply_score += 1.0
+
+        reply_board = board_after.copy(stack=False)
+        reply_board.push(reply)
+        raw_eval = get_position_evaluation(reply_board)
+        reply_score += raw_eval if board_after.turn == chess.WHITE else -raw_eval
+
+        if reply_score > best_score:
+            best_score = reply_score
+            best_reply = reply
+
+    if best_reply is None:
+        return None
+
+    try:
+        reply_san = board_after.san(best_reply)
+    except Exception:
+        reply_san = best_reply.uci()
+
+    if board_after.is_capture(best_reply):
+        return f"Expect the opponent to look at {reply_san}; check the recapture sequence before relaxing."
+    if board_after.gives_check(best_reply):
+        return f"The opponent's forcing reply may be {reply_san}, so king safety still matters."
+    return f"A likely reply is {reply_san}; your plan should still make sense after that."
+
+
+def build_coach_themes(board: chess.Board, analysis, suggested_move: Optional[chess.Move]) -> list[str]:
+    themes: list[str] = []
+
+    if suggested_move and board.is_capture(suggested_move):
+        see = static_exchange_evaluation(board, suggested_move)
+        themes.append("exchange calculation" if see >= 0 else "unsafe capture")
+
+    if suggested_move and board.is_castling(suggested_move):
+        themes.append("king safety")
+
+    if suggested_move and board.gives_check(suggested_move):
+        themes.append("forcing moves")
+
+    breakdown = getattr(analysis, "breakdown", None) if analysis is not None else None
+    if breakdown is not None:
+        if abs(getattr(breakdown, "piece_safety", 0.0)) > 0.5:
+            themes.append("loose pieces")
+        if abs(getattr(breakdown, "king_safety", 0.0)) > 0.2:
+            themes.append("king safety")
+        if abs(getattr(breakdown, "center_control", 0.0)) > 0.2:
+            themes.append("center control")
+        if abs(getattr(breakdown, "development", 0.0)) > 0.2:
+            themes.append("development")
+
+    if not themes:
+        themes.append("safe improvement")
+
+    return list(dict.fromkeys(themes))[:4]
+
+
+def build_training_prompt(
+    board: chess.Board,
+    suggested_move_san: Optional[str],
+    coach_points: list[str],
+    themes: list[str],
+) -> Dict[str, str]:
+    theme = themes[0] if themes else "candidate moves"
+
+    if "loose pieces" in themes or "exchange calculation" in themes:
+        question = "Lesson: calculate the whole exchange, not only the first capture."
+        hint = "Look at the target square and count: who can recapture, and which side wins material after the sequence ends?"
+        task = "Try naming the loose piece or capture sequence before looking at the answer."
+    elif "king safety" in themes:
+        question = "Lesson: king safety decides which forcing moves matter."
+        hint = "Identify checks, exposed king lines, and whether castling or a defensive move solves the problem."
+        task = "Try deciding which king is under more pressure."
+    elif "center control" in themes:
+        question = "Lesson: central control is useful only when it is tactically safe."
+        hint = "Focus on d4, e4, d5, and e5, then check whether any piece becomes loose."
+        task = "Try identifying which central square matters most here."
+    elif "development" in themes:
+        question = "Lesson: improve undeveloped pieces before making repeated queen or pawn moves."
+        hint = "Knights and bishops usually want active squares, but the move still has to be tactically safe."
+        task = "Try finding which piece is least active."
+    else:
+        question = "Lesson: choose a move that improves something and does not create an immediate tactic."
+        hint = "Use this checklist: checks, captures, loose pieces, then improvement."
+        task = "Try stating the plan in words before caring about the exact move."
+
+    answer = (
+        f"In this position, {suggested_move_san} fits the lesson. {coach_points[1] if len(coach_points) > 1 else coach_points[0]}"
+        if suggested_move_san and coach_points
+        else "The key is to improve your position without allowing an immediate tactic."
+    )
+
+    return {
+        "theme": theme,
+        "question": question,
+        "hint": hint,
+        "task": task,
+        "answer": answer,
+    }
+
+
+def build_coach_points(
+    board: chess.Board,
+    analysis,
+    suggested_move: Optional[chess.Move],
+    suggested_move_san: Optional[str],
+) -> list[str]:
     points: list[str] = []
 
     if suggested_move_san:
         points.append(f"Candidate move: {suggested_move_san}.")
+        points.append(move_plan_description(board, suggested_move))
+
+    reply_note = best_opponent_reply_note(board, suggested_move)
+    if reply_note:
+        points.append(reply_note)
 
     if analysis is not None:
         breakdown = getattr(analysis, "breakdown", None)
@@ -337,7 +510,7 @@ def build_coach_points(board: chess.Board, analysis, suggested_move_san: Optiona
     if not points:
         points.append("Improve piece activity while avoiding loose pieces.")
 
-    return points[:4]
+    return points[:5]
 
 
 def build_coach_title(board: chess.Board, evaluation: float, suggested_move_san: Optional[str]) -> str:
@@ -491,8 +664,15 @@ def get_coach_advice(board: chess.Board, difficulty: str = "medium") -> Dict[str
     if real_explanation:
         message_parts.append(real_explanation)
 
-    coach_points = build_coach_points(board, analysis, suggested_move_san)
+    coach_points = build_coach_points(board, analysis, suggested_move, suggested_move_san)
     coach_title = build_coach_title(board, evaluation, suggested_move_san)
+    coach_themes = build_coach_themes(board, analysis, suggested_move)
+    training_prompt = build_training_prompt(
+        board,
+        suggested_move_san,
+        coach_points,
+        coach_themes,
+    )
 
     return {
         "suggested_move": suggested_move_uci,
@@ -503,5 +683,7 @@ def get_coach_advice(board: chess.Board, difficulty: str = "medium") -> Dict[str
         "coach_summary": real_summary or basic_position_message(board, evaluation),
         "coach_explanation": real_explanation,
         "coach_points": coach_points,
-        "ai_status": get_ai_status(),
+        "coach_themes": coach_themes,
+        "training_prompt": training_prompt,
+        "ai_status": get_ai_status(ensure_loaded=True),
     }
