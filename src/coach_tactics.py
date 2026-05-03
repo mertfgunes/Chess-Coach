@@ -26,22 +26,11 @@ def defenders_count(board: chess.Board, square: int, color: chess.Color) -> int:
     return len(board.attackers(color, square))
 
 
-# ---------------------------------------------------------------------------
-# Static Exchange Evaluation (SEE)
-# ---------------------------------------------------------------------------
-# Returns the material gain/loss (in pawn units) for a capture on `square`
-# by `side`, assuming both sides recapture with their least-valuable pieces.
-# Positive = the capturing side wins material.
-# Negative = the capturing side loses material.
-# ---------------------------------------------------------------------------
-
 def _least_valuable_attacker(
-    board: chess.Board, square: int, color: chess.Color
+    board: chess.Board,
+    square: int,
+    color: chess.Color,
 ) -> tuple[int | None, int]:
-    """
-    Find the least-valuable piece of `color` that attacks `square`.
-    Returns (from_square, piece_value) or (None, 0) if no attacker exists.
-    """
     min_val = 999
     min_sq = None
     for atk_sq in board.attackers(color, square):
@@ -55,84 +44,110 @@ def _least_valuable_attacker(
     return min_sq, min_val
 
 
+def _legal_captures_to_square(
+    board: chess.Board,
+    square: int,
+    color: chess.Color,
+) -> list[chess.Move]:
+    original_turn = board.turn
+    board.turn = color
+    try:
+        return [
+            move
+            for move in board.legal_moves
+            if move.to_square == square
+            and board.piece_at(move.from_square) is not None
+        ]
+    finally:
+        board.turn = original_turn
+
+
+def _best_capture_sequence_gain(
+    board: chess.Board,
+    square: int,
+    color: chess.Color,
+    target_value: int,
+    depth: int = 0,
+) -> int:
+    """
+    Best net gain for `color` if it chooses to capture on `square`.
+
+    The side can decline the exchange, so the returned gain is never negative.
+    """
+    if depth >= 12:
+        return 0
+
+    best_gain = 0
+    captures = _legal_captures_to_square(board, square, color)
+    captures.sort(key=lambda move: get_piece_value(board.piece_at(move.from_square)))
+
+    for capture in captures:
+        attacker = board.piece_at(capture.from_square)
+        if attacker is None:
+            continue
+
+        attacker_value = get_piece_value(attacker)
+        sim = board.copy(stack=False)
+        sim.push(capture)
+
+        reply_gain = _best_capture_sequence_gain(
+            sim,
+            square,
+            not color,
+            attacker_value,
+            depth + 1,
+        )
+        gain = target_value - reply_gain
+
+        if gain > best_gain:
+            best_gain = gain
+
+    return best_gain
+
+
 def static_exchange_evaluation(board: chess.Board, move: chess.Move) -> int:
     """
     Estimate the net material gain for the side making `move`.
 
-    Positive  → capturing side comes out ahead (or even).
-    Negative  → capturing side loses material.
-    Zero      → even exchange or no capture.
+    Positive = capturing side wins material.
+    Negative = capturing side loses material.
+    Zero = equal exchange or non-capture.
 
-    The implementation simulates the full recapture sequence using each
-    side's least-valuable attacker, consistent with standard SEE algorithms.
+    Legal recaptures are generated through python-chess, so pins and king
+    safety are respected.
     """
     target_square = move.to_square
 
-    # Value of the piece being captured (0 if not a capture)
     captured_piece = board.piece_at(target_square)
     if captured_piece is None:
         if board.is_en_passant(move):
             captured_value = PIECE_VALUES[chess.PAWN]
         else:
-            return 0  # not a capture
+            return 0
     else:
         captured_value = PIECE_VALUES.get(captured_piece.piece_type, 0)
 
-    # Value of the piece doing the capturing
     attacker_piece = board.piece_at(move.from_square)
     if attacker_piece is None:
         return 0
-    attacker_value = PIECE_VALUES.get(attacker_piece.piece_type, 0)
 
-    # gains[0] = what the capturing side gains on the first capture
-    gains: list[int] = [captured_value]
+    if move not in board.legal_moves:
+        return 0
 
-    # Simulate the board after the first capture
+    attacker_value = get_piece_value(attacker_piece)
     sim = board.copy(stack=False)
     sim.push(move)
 
-    # Alternate sides recapturing with least-valuable piece
-    current_value_on_square = attacker_value
-    side = sim.turn  # opponent goes next
+    opponent_gain = _best_capture_sequence_gain(
+        sim,
+        target_square,
+        sim.turn,
+        attacker_value,
+    )
+    return captured_value - opponent_gain
 
-    for _ in range(30):  # safety cap – a recapture chain can't exceed 30 plies
-        atk_sq, atk_val = _least_valuable_attacker(sim, target_square, side)
-        if atk_sq is None:
-            break  # no more attackers for this side
-
-        # This side captures; they gain whatever is currently on the square
-        gains.append(current_value_on_square)
-        current_value_on_square = atk_val
-
-        # Push the recapture
-        recap_move = chess.Move(atk_sq, target_square)
-        if recap_move in sim.legal_moves:
-            sim.push(recap_move)
-        else:
-            # Handle promotion or special cases gracefully
-            break
-
-        side = sim.turn
-
-    # Minimax back through the gains array
-    # Each side will only recapture if it improves their result
-    while len(gains) > 1:
-        gains[-2] = max(-gains[-1], gains[-2])
-        gains.pop()
-
-    return gains[0]
-
-
-# ---------------------------------------------------------------------------
-# Hanging-piece helpers
-# ---------------------------------------------------------------------------
 
 def hangs_piece_after_move(board: chess.Board, move: chess.Move) -> bool:
-    """
-    Returns True if the piece that just moved ends up on an undefended square
-    attacked by a cheaper enemy piece (i.e. it would lose material if taken).
-    Uses SEE so it correctly accounts for recaptures.
-    """
     board_copy = board.copy(stack=False)
     board_copy.push(move)
 
@@ -140,26 +155,23 @@ def hangs_piece_after_move(board: chess.Board, move: chess.Move) -> bool:
     if moved_piece is None:
         return False
 
-    opponent = board_copy.turn  # side to move after the push = opponent
+    opponent = board_copy.turn
 
     if not board_copy.is_attacked_by(opponent, move.to_square):
         return False
 
-    # Build a hypothetical recapture move and run SEE from opponent's POV
     atk_sq, _ = _least_valuable_attacker(board_copy, move.to_square, opponent)
     if atk_sq is None:
         return False
 
     recapture = chess.Move(atk_sq, move.to_square)
     see_result = static_exchange_evaluation(board_copy, recapture)
-    # If SEE ≥ 0 for the opponent, the opponent benefits → piece hangs
     return see_result >= 0
 
 
 def find_hanging_pieces(board: chess.Board, color: chess.Color) -> list[tuple[int, int]]:
     """
-    Returns a list of (square, piece_value) for pieces of `color` that are
-    hanging — i.e. the opponent can capture them with a net material gain.
+    Returns pieces of `color` that the opponent can capture for net gain.
     """
     result = []
     opponent = not color
@@ -170,13 +182,14 @@ def find_hanging_pieces(board: chess.Board, color: chess.Color) -> list[tuple[in
         if not board.is_attacked_by(opponent, square):
             continue
 
-        atk_sq, _ = _least_valuable_attacker(board, square, opponent)
-        if atk_sq is None:
-            continue
-
-        capture = chess.Move(atk_sq, square)
-        if static_exchange_evaluation(board, capture) > 0:
-            result.append((square, PIECE_VALUES.get(piece.piece_type, 0)))
+        best_gain = _best_capture_sequence_gain(
+            board,
+            square,
+            opponent,
+            get_piece_value(piece),
+        )
+        if best_gain > 0:
+            result.append((square, get_piece_value(piece)))
 
     return result
 
@@ -190,21 +203,16 @@ def immediate_material_threat(board: chess.Board, color: chess.Color) -> int:
 
 def hanging_material_after_move(board: chess.Board, move: chess.Move) -> int:
     """
-    Returns the value of the most valuable piece the mover leaves hanging
-    AFTER making `move`, excluding pieces that were already hanging BEFORE
-    the move (to avoid double-penalising pre-existing problems).
+    Most valuable newly hanging piece the mover leaves after making `move`.
+    Existing hanging pieces are ignored to avoid double penalties.
     """
     mover_color = board.turn
-
-    # Pieces already hanging before the move
     hanging_before = {sq for sq, _ in find_hanging_pieces(board, mover_color)}
 
     board_copy = board.copy(stack=False)
     board_copy.push(move)
 
     hanging_after = find_hanging_pieces(board_copy, mover_color)
-
-    # Only count pieces newly hanging (not already hanging before)
     new_hanging = [(sq, val) for sq, val in hanging_after if sq not in hanging_before]
 
     if not new_hanging:
@@ -217,10 +225,6 @@ def leaves_piece_hanging_after_move(board: chess.Board, move: chess.Move) -> boo
 
 
 def is_likely_recaptured(board: chess.Board, move: chess.Move) -> bool:
-    """
-    Returns True if the opponent has at least one attacker on the destination
-    square after the move.  Used as a lightweight signal (not a full SEE).
-    """
     board_copy = board.copy(stack=False)
     board_copy.push(move)
     opponent = board_copy.turn
