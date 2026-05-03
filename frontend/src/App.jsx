@@ -452,17 +452,6 @@ function App() {
             <div className="custom-board">{renderBoard()}</div>
           </div>
 
-          <div className="table-strip">
-            <div>
-              <span>Last AI move</span>
-              <strong>{lastAiMove || "None"}</strong>
-            </div>
-            <div>
-              <span>Position</span>
-              <strong>{evaluationLabel(evaluation)}</strong>
-            </div>
-          </div>
-
           <section className="coach-stage">
             <div className="coach-stage-header">
               <span>Coach</span>
@@ -483,6 +472,17 @@ function App() {
               </ul>
             ) : null}
           </section>
+
+          <div className="table-strip">
+            <div>
+              <span>Last AI move</span>
+              <strong>{lastAiMove || "None"}</strong>
+            </div>
+            <div>
+              <span>Position</span>
+              <strong>{evaluationLabel(evaluation)}</strong>
+            </div>
+          </div>
         </main>
 
         <aside className="panel">
@@ -546,11 +546,6 @@ function App() {
           <section className="info-block">
             <h3>Status</h3>
             <p>{status}</p>
-          </section>
-
-          <section className="info-block coach-block">
-            <h3>Coach</h3>
-            <p>{coachMessage}</p>
           </section>
 
           <section className="info-block">
