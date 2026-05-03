@@ -47,13 +47,13 @@ def board_from_fen(fen: str):
 def home():
     return jsonify({
         "message": "Chess Coach API is running",
-        "ai_status": get_ai_status(),
+        "ai_status": get_ai_status(ensure_loaded=True),
     })
 
 
 @app.route("/status", methods=["GET"])
 def status():
-    return jsonify(get_ai_status())
+    return jsonify(get_ai_status(ensure_loaded=True))
 
 
 @app.route("/new-game", methods=["GET"])

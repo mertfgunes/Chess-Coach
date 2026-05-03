@@ -76,7 +76,10 @@ except Exception as e:
     print(f"[Web AI] Could not import coach service: {e}")
 
 
-def get_ai_status() -> Dict[str, Any]:
+def get_ai_status(ensure_loaded: bool = False) -> Dict[str, Any]:
+    if ensure_loaded and REAL_AI_AVAILABLE and (_model is None or _vocab is None):
+        get_model_and_vocab()
+
     return {
         "real_ai_available": REAL_AI_AVAILABLE,
         "real_eval_available": REAL_EVAL_AVAILABLE,
