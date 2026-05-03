@@ -1,8 +1,15 @@
 venv/
 .venv/
-data/
+
+# Ignore everything in data except move_vocab.txt this is for web implementation
+data/*
+!data/
+!data/move_vocab.txt
+
 __pycache__/
 *.pyc
+
 *.pt
 *.pth
-/engines
+
+/engines/
