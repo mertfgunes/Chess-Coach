@@ -64,6 +64,12 @@ function App() {
   const [coachMessage, setCoachMessage] = useState(
     "Play a move, then ask for advice when you want a coaching note."
   );
+  const [coachInsight, setCoachInsight] = useState({
+    title: "Coach Insight",
+    summary: "Ask the coach for a focused plan in the current position.",
+    explanation: "",
+    points: ["Look for forcing moves, loose pieces, and king safety."],
+  });
   const [lastAiMove, setLastAiMove] = useState(null);
   const [lastMove, setLastMove] = useState(null);
   const [moveHistory, setMoveHistory] = useState([]);
@@ -309,6 +315,12 @@ function App() {
 
       setEvaluation(data.evaluation);
       setCoachMessage(data.message);
+      setCoachInsight({
+        title: data.coach_title || "Coach Insight",
+        summary: data.coach_summary || data.message || "No summary available.",
+        explanation: data.coach_explanation || "",
+        points: Array.isArray(data.coach_points) ? data.coach_points : [],
+      });
       setStatus("Coach advice updated.");
     } catch {
       setStatus("Backend is not reachable. Start the Flask server first.");
@@ -358,6 +370,12 @@ function App() {
     setStatus("New game started. White to move.");
     setEvaluation(null);
     setCoachMessage("Play a move, then ask for advice when you want a coaching note.");
+    setCoachInsight({
+      title: "Coach Insight",
+      summary: "Ask the coach for a focused plan in the current position.",
+      explanation: "",
+      points: ["Look for forcing moves, loose pieces, and king safety."],
+    });
     setLastAiMove(null);
     setLastMove(null);
     setMoveHistory([]);
@@ -436,6 +454,27 @@ function App() {
               <strong>{evaluationLabel(evaluation)}</strong>
             </div>
           </div>
+
+          <section className="coach-stage">
+            <div className="coach-stage-header">
+              <span>Coach</span>
+              <button type="button" onClick={getCoachAdvice} disabled={isBusy}>
+                {isCoachThinking ? "Analyzing..." : "Explain this position"}
+              </button>
+            </div>
+            <h2>{coachInsight.title}</h2>
+            <p>{coachInsight.summary}</p>
+            {coachInsight.explanation ? (
+              <p className="coach-explanation">{coachInsight.explanation}</p>
+            ) : null}
+            {coachInsight.points.length ? (
+              <ul className="coach-points">
+                {coachInsight.points.map((point) => (
+                  <li key={point}>{point}</li>
+                ))}
+              </ul>
+            ) : null}
+          </section>
         </main>
 
         <aside className="panel">
@@ -478,16 +517,21 @@ function App() {
               <button type="button" onClick={evaluatePosition} disabled={isBusy}>
                 {isEvaluating ? "Reading..." : "Evaluate"}
               </button>
-              <button type="button" onClick={getCoachAdvice} disabled={isBusy}>
-                {isCoachThinking ? "Coaching..." : "Coach"}
-              </button>
               <button type="button" onClick={checkBackendStatus} disabled={isBusy}>
                 {isCheckingStatus ? "Checking..." : "Status"}
               </button>
+              <button type="button" onClick={resetGame} disabled={isBusy}>
+                Reset game
+              </button>
             </div>
 
-            <button type="button" className="reset-button" onClick={resetGame} disabled={isBusy}>
-              Reset game
+            <button
+              type="button"
+              className="coach-button"
+              onClick={getCoachAdvice}
+              disabled={isBusy}
+            >
+              {isCoachThinking ? "Coach is analyzing..." : "Get coach explanation"}
             </button>
           </section>
 

@@ -246,12 +246,94 @@ h3 {
 }
 
 .table-strip > div,
+.coach-stage,
 .info-block,
 .control-block {
   background: #ffffff;
   border: 1px solid #dfe5e9;
   border-radius: 8px;
   padding: 14px;
+}
+
+.coach-stage {
+  margin-top: 18px;
+  border-left: 5px solid #2f6f73;
+  box-shadow: 0 14px 30px rgba(31, 49, 56, 0.08);
+}
+
+.coach-stage-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.coach-stage-header span {
+  color: #2f6f73;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.coach-stage-header button,
+.coach-button {
+  border: 0;
+  border-radius: 6px;
+  background: #2f6f73;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.coach-stage-header button {
+  min-height: 38px;
+  padding: 8px 13px;
+}
+
+.coach-stage h2 {
+  color: #13272a;
+  font-size: 22px;
+  line-height: 1.18;
+  margin-bottom: 8px;
+}
+
+.coach-stage p {
+  color: #2d353d;
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+.coach-explanation {
+  margin-top: 8px;
+}
+
+.coach-points {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.coach-points li {
+  position: relative;
+  color: #243038;
+  font-size: 14px;
+  line-height: 1.4;
+  padding-left: 18px;
+}
+
+.coach-points li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.55em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2f6f73;
 }
 
 .table-strip span {
@@ -294,7 +376,7 @@ h3 {
 
 .segmented button,
 .button-grid button,
-.reset-button {
+.coach-button {
   border: 0;
   border-radius: 6px;
   cursor: pointer;
@@ -336,7 +418,7 @@ h3 {
 }
 
 .button-grid button,
-.reset-button {
+.coach-button {
   background: #26323c;
   color: #fff;
   min-height: 42px;
@@ -344,7 +426,8 @@ h3 {
 }
 
 .button-grid button:hover:not(:disabled),
-.reset-button:hover:not(:disabled) {
+.coach-button:hover:not(:disabled),
+.coach-stage-header button:hover:not(:disabled) {
   background: #111920;
 }
 
@@ -352,10 +435,11 @@ button:disabled {
   opacity: 0.55;
 }
 
-.reset-button {
+.coach-button {
   width: 100%;
+  min-height: 50px;
   margin-top: 8px;
-  background: #7a4a3a;
+  background: #2f6f73;
 }
 
 .info-block {
