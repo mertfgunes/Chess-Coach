@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import chess
 from coach_models import EvaluationBreakdown
-from coach_tactics import immediate_material_threat
+from coach_tactics import immediate_material_threat, static_exchange_evaluation
 
 PIECE_VALUES = {
     chess.PAWN: 1.0,
@@ -128,10 +128,35 @@ def winner_hint_from_score(score: float) -> str:
         return "Black is slightly better"
     return "The position is roughly equal"
 
+def best_pending_capture_gain(board: chess.Board) -> float:
+    """
+    Immediate profitable capture for the side to move, in pawn units.
+
+    This smooths out half-finished exchanges. For example, after White captures
+    a Black knight and Black can simply recapture the bishop, the position
+    should not briefly look like White is winning a full piece.
+    """
+    best_gain = 0.0
+
+    for move in board.legal_moves:
+        if not board.is_capture(move):
+            continue
+
+        see = static_exchange_evaluation(board, move)
+        if see > best_gain:
+            best_gain = float(see)
+
+    if best_gain <= 0:
+        return 0.0
+
+    return best_gain if board.turn == chess.WHITE else -best_gain
+
+
 def evaluate_piece_safety(board: chess.Board) -> float:
     white_threat = immediate_material_threat(board, chess.WHITE)
     black_threat = immediate_material_threat(board, chess.BLACK)
+    pending_exchange = best_pending_capture_gain(board)
 
-    # if White has hanging pieces, that's bad for White
-    # if Black has hanging pieces, that's good for White
-    return (black_threat - white_threat) * 0.35
+    # Pending captures get full weight because they are legal right now.
+    # Other hanging material stays softer so it does not overpower everything.
+    return pending_exchange + (black_threat - white_threat) * 0.15
