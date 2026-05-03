@@ -21,6 +21,109 @@ input {
   padding: 24px;
 }
 
+.endgame-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(13, 18, 22, 0.58);
+}
+
+.endgame-modal {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  background: #ffffff;
+  border: 1px solid #d5dce1;
+  border-top: 8px solid #2f6f73;
+  border-radius: 8px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3);
+  padding: 22px;
+}
+
+.endgame-modal.loss {
+  border-top-color: #8a3d32;
+}
+
+.endgame-modal.draw {
+  border-top-color: #6b7280;
+}
+
+.endgame-kicker {
+  color: #65717d;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+  text-transform: uppercase;
+}
+
+.endgame-modal h2 {
+  color: #10171d;
+  font-size: 30px;
+  line-height: 1.1;
+  margin-bottom: 8px;
+}
+
+.endgame-modal h3 {
+  margin-top: 18px;
+}
+
+.endgame-result {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  margin: 2px 0 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: #edf1f3;
+  color: #26323c;
+  font-weight: 900;
+}
+
+.endgame-modal p {
+  color: #2d353d;
+  font-size: 15px;
+  line-height: 1.45;
+  margin-top: 8px;
+}
+
+.endgame-modal ul {
+  display: grid;
+  gap: 7px;
+  margin: 14px 0 0;
+  padding-left: 20px;
+}
+
+.endgame-modal li {
+  color: #243038;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.endgame-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.endgame-actions button {
+  min-height: 44px;
+  border: 0;
+  border-radius: 6px;
+  background: #26323c;
+  color: #fff;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.endgame-actions button:last-child {
+  background: #2f6f73;
+}
+
 .shell {
   width: min(1220px, 100%);
   margin: 0 auto;

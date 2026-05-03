@@ -75,6 +75,7 @@ function App() {
   const [moveHistory, setMoveHistory] = useState([]);
   const [aiStatus, setAiStatus] = useState(null);
   const [autoReply, setAutoReply] = useState(true);
+  const [endGameModal, setEndGameModal] = useState(null);
 
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
@@ -123,6 +124,31 @@ function App() {
       explanation: data.coach_explanation || "",
       points: Array.isArray(data.coach_points) ? data.coach_points : [],
     });
+  }
+
+  function buildEndGameModalData(finalGame, data = {}) {
+    const result = finalGame.result();
+    let heading = "Game over";
+    let tone = "draw";
+
+    if (finalGame.isCheckmate()) {
+      const winner = finalGame.turn() === "w" ? "Black" : "White";
+      heading = winner === "White" ? "You won by checkmate" : "You lost by checkmate";
+      tone = winner === "White" ? "win" : "loss";
+    } else if (finalGame.isDraw()) {
+      heading = "Draw";
+      tone = "draw";
+    }
+
+    return {
+      heading,
+      tone,
+      result,
+      title: data.coach_title || heading,
+      summary: data.coach_summary || data.message || "The game has ended.",
+      explanation: data.coach_explanation || "",
+      points: Array.isArray(data.coach_points) ? data.coach_points : [],
+    };
   }
 
   function handleSquareClick(square) {
@@ -193,6 +219,7 @@ function App() {
 
     if (gameCopy.isGameOver()) {
       setStatus(`You played ${move.san}. Game over: ${gameCopy.result()}`);
+      setEndGameModal(buildEndGameModalData(gameCopy));
       getCoachAdvice(gameCopy, { allowBusy: true, finalGame: true });
       return;
     }
@@ -258,6 +285,7 @@ function App() {
       if (data.game_over) {
         setStatus(`AI played ${data.move_san || data.move}. Game over: ${data.result}`);
         applyCoachData(data);
+        setEndGameModal(buildEndGameModalData(gameCopy, data));
       } else {
         setStatus(`AI played ${data.move_san || data.move}. Your move.`);
       }
@@ -329,6 +357,9 @@ function App() {
       }
 
       applyCoachData(data);
+      if (options.finalGame && sourceGame.isGameOver()) {
+        setEndGameModal(buildEndGameModalData(sourceGame, data));
+      }
       setStatus(options.finalGame ? "Final explanation ready." : "Coach advice updated.");
     } catch {
       setStatus("Backend is not reachable. Start the Flask server first.");
@@ -387,6 +418,7 @@ function App() {
     setLastAiMove(null);
     setLastMove(null);
     setMoveHistory([]);
+    setEndGameModal(null);
   }
 
   function renderBoard() {
@@ -435,6 +467,33 @@ function App() {
 
   return (
     <div className="app">
+      {endGameModal ? (
+        <div className="endgame-backdrop" role="dialog" aria-modal="true">
+          <section className={`endgame-modal ${endGameModal.tone}`}>
+            <div className="endgame-kicker">Final position</div>
+            <h2>{endGameModal.heading}</h2>
+            <div className="endgame-result">{endGameModal.result}</div>
+            <h3>{endGameModal.title}</h3>
+            <p>{endGameModal.summary}</p>
+            {endGameModal.explanation ? <p>{endGameModal.explanation}</p> : null}
+            {endGameModal.points.length ? (
+              <ul>
+                {endGameModal.points.map((point) => (
+                  <li key={point}>{point}</li>
+                ))}
+              </ul>
+            ) : null}
+            <div className="endgame-actions">
+              <button type="button" onClick={() => setEndGameModal(null)}>
+                Review board
+              </button>
+              <button type="button" onClick={resetGame}>
+                New game
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
       <div className="shell">
         <main className="play-area">
           <div className="topbar">
