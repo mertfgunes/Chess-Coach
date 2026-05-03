@@ -112,6 +112,19 @@ function App() {
     ]);
   }
 
+  function applyCoachData(data) {
+    if (!data) return;
+
+    setEvaluation(data.evaluation);
+    setCoachMessage(data.message || "");
+    setCoachInsight({
+      title: data.coach_title || "Coach Insight",
+      summary: data.coach_summary || data.message || "No summary available.",
+      explanation: data.coach_explanation || "",
+      points: Array.isArray(data.coach_points) ? data.coach_points : [],
+    });
+  }
+
   function handleSquareClick(square) {
     if (isBusy) {
       setStatus("Let the current analysis finish first.");
@@ -180,6 +193,7 @@ function App() {
 
     if (gameCopy.isGameOver()) {
       setStatus(`You played ${move.san}. Game over: ${gameCopy.result()}`);
+      getCoachAdvice(gameCopy, { allowBusy: true, finalGame: true });
       return;
     }
 
@@ -243,6 +257,7 @@ function App() {
 
       if (data.game_over) {
         setStatus(`AI played ${data.move_san || data.move}. Game over: ${data.result}`);
+        applyCoachData(data);
       } else {
         setStatus(`AI played ${data.move_san || data.move}. Your move.`);
       }
@@ -287,11 +302,11 @@ function App() {
     }
   }
 
-  async function getCoachAdvice() {
-    if (isBusy) return;
+  async function getCoachAdvice(sourceGame = game, options = {}) {
+    if (isBusy && !options.allowBusy) return;
 
     setIsCoachThinking(true);
-    setStatus("Preparing coach advice...");
+    setStatus(options.finalGame ? "Explaining the final position..." : "Preparing coach advice...");
 
     try {
       const response = await fetch(`${API_URL}/coach`, {
@@ -300,7 +315,7 @@ function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          fen: game.fen(),
+          fen: sourceGame.fen(),
           difficulty,
         }),
       });
@@ -313,15 +328,8 @@ function App() {
         return;
       }
 
-      setEvaluation(data.evaluation);
-      setCoachMessage(data.message);
-      setCoachInsight({
-        title: data.coach_title || "Coach Insight",
-        summary: data.coach_summary || data.message || "No summary available.",
-        explanation: data.coach_explanation || "",
-        points: Array.isArray(data.coach_points) ? data.coach_points : [],
-      });
-      setStatus("Coach advice updated.");
+      applyCoachData(data);
+      setStatus(options.finalGame ? "Final explanation ready." : "Coach advice updated.");
     } catch {
       setStatus("Backend is not reachable. Start the Flask server first.");
     } finally {
@@ -458,7 +466,7 @@ function App() {
           <section className="coach-stage">
             <div className="coach-stage-header">
               <span>Coach</span>
-              <button type="button" onClick={getCoachAdvice} disabled={isBusy}>
+              <button type="button" onClick={() => getCoachAdvice()} disabled={isBusy}>
                 {isCoachThinking ? "Analyzing..." : "Explain this position"}
               </button>
             </div>
@@ -528,7 +536,7 @@ function App() {
             <button
               type="button"
               className="coach-button"
-              onClick={getCoachAdvice}
+              onClick={() => getCoachAdvice()}
               disabled={isBusy}
             >
               {isCoachThinking ? "Coach is analyzing..." : "Get coach explanation"}

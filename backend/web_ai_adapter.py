@@ -359,9 +359,14 @@ def get_game_over_advice(board: chess.Board) -> Dict[str, Any]:
         winner = "Black" if board.turn == chess.WHITE else "White"
         loser = "White" if winner == "Black" else "Black"
         summary = f"{winner} wins by checkmate."
+        final_move_sentence = (
+            f"The final move was {last_move_text}, and it left every defensive option covered."
+            if last_move is not None
+            else "Every defensive option is covered in the final position."
+        )
         explanation = (
             f"{loser}'s king is in check and has no legal escape, capture, or block. "
-            f"The final move was {last_move_text}, which left every defensive option covered."
+            f"{final_move_sentence}"
         )
         points = [
             "Checkmate means the attacked king cannot move to safety.",
@@ -378,7 +383,7 @@ def get_game_over_advice(board: chess.Board) -> Dict[str, Any]:
             "coach_summary": summary,
             "coach_explanation": explanation,
             "coach_points": points,
-            "ai_status": get_ai_status(),
+            "ai_status": get_ai_status(ensure_loaded=True),
         }
 
     if board.is_stalemate():
@@ -426,7 +431,7 @@ def get_game_over_advice(board: chess.Board) -> Dict[str, Any]:
         "coach_summary": summary,
         "coach_explanation": explanation,
         "coach_points": points,
-        "ai_status": get_ai_status(),
+        "ai_status": get_ai_status(ensure_loaded=True),
     }
 
 

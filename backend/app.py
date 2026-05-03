@@ -120,7 +120,7 @@ def predict():
 
     board.push(move)
 
-    return jsonify({
+    response_data = {
         "move": move.uci(),
         "move_san": move_san,
         "fen_after": board.fen(),
@@ -128,7 +128,12 @@ def predict():
         "game_over": board.is_game_over(),
         "result": board.result() if board.is_game_over() else None,
         "ai_status": get_ai_status(),
-    })
+    }
+
+    if board.is_game_over():
+        response_data.update(get_coach_advice(board, difficulty))
+
+    return jsonify(response_data)
 
 
 @app.route("/evaluate", methods=["POST"])
