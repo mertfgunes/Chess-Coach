@@ -136,11 +136,29 @@ function App() {
       return;
     }
 
-    const move = gameCopy.move({
-      from: selectedSquare,
-      to: square,
-      promotion: "q",
-    });
+    if (selectedSquare === square) {
+      setSelectedSquare(null);
+      setStatus("Selection cleared.");
+      return;
+    }
+
+    const targetPiece = gameCopy.get(square);
+    if (targetPiece?.color === "w") {
+      setSelectedSquare(square);
+      setStatus(`Selected ${square}.`);
+      return;
+    }
+
+    let move = null;
+    try {
+      move = gameCopy.move({
+        from: selectedSquare,
+        to: square,
+        promotion: "q",
+      });
+    } catch {
+      move = null;
+    }
 
     if (move === null) {
       setSelectedSquare(null);
