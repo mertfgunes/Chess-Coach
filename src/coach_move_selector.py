@@ -8,7 +8,7 @@ import torch
 from coach_models import MoveSuggestion
 from coach_evaluation import evaluate_position
 from encoding import board_to_tensor
-from play_against_ai import board_to_extras, DEVICE
+from play_against_ai import board_to_extras, DEVICE, search_adjustment_for_move
 from coach_tactics import (
     hangs_piece_after_move,
     hanging_material_after_move,
@@ -97,7 +97,8 @@ def get_top_moves(
         # Small opening-principle bonus for the coach ranking too.
         tactical_adjustment += opening_coach_bonus(board, move)
 
-        final_score = eval_score + tactical_adjustment
+        search_score = search_adjustment_for_move(board, move, reply_limit=12)
+        final_score = eval_score + tactical_adjustment + (0.65 * search_score)
 
         scored_moves.append(
             {
