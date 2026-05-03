@@ -1,79 +1,138 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Chess } from "chess.js";
 import "./App.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000";
 
 const pieceSymbols = {
-  p: "♟",
-  r: "♜",
-  n: "♞",
-  b: "♝",
-  q: "♛",
-  k: "♚",
-  P: "♙",
-  R: "♖",
-  N: "♘",
-  B: "♗",
-  Q: "♕",
-  K: "♔",
+  p: "\u265F",
+  r: "\u265C",
+  n: "\u265E",
+  b: "\u265D",
+  q: "\u265B",
+  k: "\u265A",
+  P: "\u2659",
+  R: "\u2656",
+  N: "\u2658",
+  B: "\u2657",
+  Q: "\u2655",
+  K: "\u2654",
 };
+
+const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
+const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
+
+const difficultyCopy = {
+  easy: "Relaxed",
+  medium: "Balanced",
+  hard: "Sharp",
+};
+
+function formatEvaluation(evaluation) {
+  if (evaluation === null || Number.isNaN(Number(evaluation))) {
+    return "No eval";
+  }
+
+  const value = Number(evaluation);
+  if (Math.abs(value) >= 90) {
+    return value > 0 ? "White mating" : "Black mating";
+  }
+
+  const prefix = value > 0 ? "+" : "";
+  return `${prefix}${value.toFixed(2)}`;
+}
+
+function evaluationLabel(evaluation) {
+  if (evaluation === null || Number.isNaN(Number(evaluation))) {
+    return "Run an evaluation when you want a read on the position.";
+  }
+
+  const value = Number(evaluation);
+  if (value > 1.5) return "White has a serious edge.";
+  if (value > 0.4) return "White is a little better.";
+  if (value < -1.5) return "Black has a serious edge.";
+  if (value < -0.4) return "Black is a little better.";
+  return "The position is close to equal.";
+}
 
 function App() {
   const [game, setGame] = useState(() => new Chess());
   const [selectedSquare, setSelectedSquare] = useState(null);
-  const [status, setStatus] = useState("Your move.");
-  const [difficulty, setDifficulty] = useState("medium");
+  const [status, setStatus] = useState("White to move.");
+  const [difficulty, setDifficulty] = useState("hard");
   const [evaluation, setEvaluation] = useState(null);
-  const [coachMessage, setCoachMessage] = useState("No coach advice yet.");
+  const [coachMessage, setCoachMessage] = useState(
+    "Play a move, then ask for advice when you want a coaching note."
+  );
   const [lastAiMove, setLastAiMove] = useState(null);
+  const [lastMove, setLastMove] = useState(null);
+  const [moveHistory, setMoveHistory] = useState([]);
   const [aiStatus, setAiStatus] = useState(null);
+  const [autoReply, setAutoReply] = useState(true);
 
-  // New loading states
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
   const [isCoachThinking, setIsCoachThinking] = useState(false);
   const [isCheckingStatus, setIsCheckingStatus] = useState(false);
 
-  const files = ["a", "b", "c", "d", "e", "f", "g", "h"];
-  const ranks = ["8", "7", "6", "5", "4", "3", "2", "1"];
-
   const isBusy =
     isAiThinking || isEvaluating || isCoachThinking || isCheckingStatus;
 
+  const legalTargets = useMemo(() => {
+    if (!selectedSquare) return new Set();
+    return new Set(
+      game.moves({ square: selectedSquare, verbose: true }).map((move) => move.to)
+    );
+  }, [game, selectedSquare]);
+
+  useEffect(() => {
+    checkBackendStatus({ quiet: true });
+  }, []);
+
   function updateAiStatus(data) {
-    if (data && data.ai_status) {
+    if (data?.ai_status) {
       setAiStatus(data.ai_status);
     }
   }
 
+  function appendMove(actor, move) {
+    setMoveHistory((history) => [
+      ...history,
+      {
+        actor,
+        san: move.san || move.move_san || move.uci || move.move,
+        uci: move.uci || move.move,
+      },
+    ]);
+  }
+
   function handleSquareClick(square) {
     if (isBusy) {
-      setStatus("Please wait until the current action finishes.");
+      setStatus("Let the current analysis finish first.");
       return;
     }
 
     const gameCopy = new Chess(game.fen());
 
     if (gameCopy.isGameOver()) {
-      setStatus("Game is over. Press Reset to start again.");
+      setStatus("Game is over. Reset to start a new one.");
+      return;
+    }
+
+    if (gameCopy.turn() !== "w") {
+      setStatus("Black is the AI side. Ask for the AI move.");
       return;
     }
 
     if (!selectedSquare) {
       const piece = gameCopy.get(square);
-
-      if (!piece) {
-        return;
-      }
-
-      if (piece.color !== gameCopy.turn()) {
-        setStatus("Select the side whose turn it is.");
+      if (!piece || piece.color !== "w") {
+        setStatus("Choose one of your white pieces.");
         return;
       }
 
       setSelectedSquare(square);
-      setStatus(`Selected ${square}. Choose a target square.`);
+      setStatus(`Selected ${square}.`);
       return;
     }
 
@@ -85,28 +144,40 @@ function App() {
 
     if (move === null) {
       setSelectedSquare(null);
-      setStatus("Illegal move.");
+      setStatus("That move is not legal.");
       return;
     }
 
     setGame(gameCopy);
     setSelectedSquare(null);
+    setLastMove({ from: move.from, to: move.to });
     setLastAiMove(null);
-    setStatus(`You played ${move.san}. Click Ask AI Move.`);
-  }
+    appendMove("You", move);
 
-  async function askAiMove() {
-    if (isBusy) {
+    if (gameCopy.isGameOver()) {
+      setStatus(`You played ${move.san}. Game over: ${gameCopy.result()}`);
       return;
     }
 
-    if (game.isGameOver()) {
-      setStatus("Game is already over. Press Reset to start again.");
+    setStatus(autoReply ? `You played ${move.san}. AI is thinking.` : `You played ${move.san}.`);
+
+    if (autoReply) {
+      askAiMove(gameCopy);
+    }
+  }
+
+  async function askAiMove(sourceGame = game) {
+    if (isBusy && sourceGame === game) {
+      return;
+    }
+
+    if (sourceGame.isGameOver()) {
+      setStatus("Game is already over. Reset to start again.");
       return;
     }
 
     setIsAiThinking(true);
-    setStatus("AI is thinking...");
+    setStatus(`${difficultyCopy[difficulty]} AI is calculating...`);
 
     try {
       const response = await fetch(`${API_URL}/predict`, {
@@ -115,7 +186,7 @@ function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          fen: game.fen(),
+          fen: sourceGame.fen(),
           difficulty,
         }),
       });
@@ -137,30 +208,32 @@ function App() {
       setGame(gameCopy);
       setSelectedSquare(null);
       setLastAiMove(data.move_san || data.move);
+      setLastMove({
+        from: data.move?.slice(0, 2),
+        to: data.move?.slice(2, 4),
+      });
+      appendMove("AI", {
+        san: data.move_san || data.move,
+        uci: data.move,
+      });
 
       if (data.game_over) {
-        setStatus(
-          `AI played ${data.move_san || data.move}. Game over: ${data.result}`
-        );
+        setStatus(`AI played ${data.move_san || data.move}. Game over: ${data.result}`);
       } else {
         setStatus(`AI played ${data.move_san || data.move}. Your move.`);
       }
     } catch {
-      setStatus(
-        "Could not connect to backend. Make sure python backend/app.py is running."
-      );
+      setStatus("Backend is not reachable. Start the Flask server first.");
     } finally {
       setIsAiThinking(false);
     }
   }
 
   async function evaluatePosition() {
-    if (isBusy) {
-      return;
-    }
+    if (isBusy) return;
 
     setIsEvaluating(true);
-    setStatus("Evaluating...");
+    setStatus("Evaluating the position...");
 
     try {
       const response = await fetch(`${API_URL}/evaluate`, {
@@ -184,21 +257,17 @@ function App() {
       setEvaluation(data.evaluation);
       setStatus("Evaluation updated.");
     } catch {
-      setStatus(
-        "Could not connect to backend. Make sure python backend/app.py is running."
-      );
+      setStatus("Backend is not reachable. Start the Flask server first.");
     } finally {
       setIsEvaluating(false);
     }
   }
 
   async function getCoachAdvice() {
-    if (isBusy) {
-      return;
-    }
+    if (isBusy) return;
 
     setIsCoachThinking(true);
-    setStatus("Coach is thinking...");
+    setStatus("Preparing coach advice...");
 
     try {
       const response = await fetch(`${API_URL}/coach`, {
@@ -224,30 +293,32 @@ function App() {
       setCoachMessage(data.message);
       setStatus("Coach advice updated.");
     } catch {
-      setStatus(
-        "Could not connect to backend. Make sure python backend/app.py is running."
-      );
+      setStatus("Backend is not reachable. Start the Flask server first.");
     } finally {
       setIsCoachThinking(false);
     }
   }
 
-  async function checkBackendStatus() {
-    if (isBusy) {
-      return;
-    }
+  async function checkBackendStatus(options = {}) {
+    if (isBusy) return;
 
     setIsCheckingStatus(true);
-    setStatus("Checking backend...");
+    if (!options.quiet) {
+      setStatus("Checking engine status...");
+    }
 
     try {
       const response = await fetch(`${API_URL}/status`);
       const data = await response.json();
 
       setAiStatus(data);
-      setStatus("Backend status updated.");
+      if (!options.quiet) {
+        setStatus("Engine status updated.");
+      }
     } catch {
-      setStatus("Backend is not reachable.");
+      if (!options.quiet) {
+        setStatus("Backend is not reachable.");
+      }
     } finally {
       setIsCheckingStatus(false);
     }
@@ -255,16 +326,18 @@ function App() {
 
   function resetGame() {
     if (isBusy) {
-      setStatus("Please wait until the current action finishes.");
+      setStatus("Let the current action finish first.");
       return;
     }
 
     setGame(new Chess());
     setSelectedSquare(null);
-    setStatus("New game started.");
+    setStatus("New game started. White to move.");
     setEvaluation(null);
-    setCoachMessage("No coach advice yet.");
+    setCoachMessage("Play a move, then ask for advice when you want a coaching note.");
     setLastAiMove(null);
+    setLastMove(null);
+    setMoveHistory([]);
   }
 
   function renderBoard() {
@@ -274,6 +347,8 @@ function App() {
         const piece = game.get(square);
         const isLight = (rankIndex + fileIndex) % 2 === 0;
         const isSelected = selectedSquare === square;
+        const isTarget = legalTargets.has(square);
+        const isLastMove = lastMove?.from === square || lastMove?.to === square;
 
         return (
           <button
@@ -281,11 +356,13 @@ function App() {
             type="button"
             className={`square ${isLight ? "light" : "dark"} ${
               isSelected ? "selected" : ""
-            } ${isBusy ? "board-disabled" : ""}`}
+            } ${isTarget ? "target" : ""} ${isLastMove ? "last-move" : ""}`}
             onClick={() => handleSquareClick(square)}
             title={square}
             disabled={isBusy}
           >
+            <span className="coord file-coord">{rankIndex === 7 ? file : ""}</span>
+            <span className="coord rank-coord">{fileIndex === 0 ? rank : ""}</span>
             <span className={piece?.color === "w" ? "white-piece" : "black-piece"}>
               {piece
                 ? pieceSymbols[
@@ -299,137 +376,150 @@ function App() {
     );
   }
 
-  function getTurnText() {
-    return game.turn() === "w" ? "White to move" : "Black to move";
-  }
-
   function getGameStateText() {
-    if (game.isCheckmate()) {
-      return "Checkmate";
-    }
-
-    if (game.isStalemate()) {
-      return "Stalemate";
-    }
-
-    if (game.isDraw()) {
-      return "Draw";
-    }
-
-    if (game.inCheck()) {
-      return `${getTurnText()} - check`;
-    }
-
-    return getTurnText();
+    if (game.isCheckmate()) return "Checkmate";
+    if (game.isStalemate()) return "Stalemate";
+    if (game.isDraw()) return "Draw";
+    if (game.inCheck()) return `${game.turn() === "w" ? "White" : "Black"} in check`;
+    return game.turn() === "w" ? "White to move" : "AI to move";
   }
 
   return (
     <div className="app">
-      <div className="container">
-        <section className="board-section">
-          <div className="header-row">
+      <div className="shell">
+        <main className="play-area">
+          <div className="topbar">
             <div>
               <h1>Chess Coach</h1>
-              <p>Click a piece, then click the target square.</p>
+              <p className="subtitle">Play White against the trained AI.</p>
             </div>
-
-            <div className="turn-pill">{isBusy ? "Working..." : getGameStateText()}</div>
+            <div className="state-stack">
+              <span className="state-pill">{isBusy ? "Thinking" : getGameStateText()}</span>
+              <span className="eval-pill">{formatEvaluation(evaluation)}</span>
+            </div>
           </div>
 
-          <div className="custom-board">{renderBoard()}</div>
-        </section>
+          <div className="board-wrap">
+            <div className="custom-board">{renderBoard()}</div>
+          </div>
+
+          <div className="table-strip">
+            <div>
+              <span>Last AI move</span>
+              <strong>{lastAiMove || "None"}</strong>
+            </div>
+            <div>
+              <span>Position</span>
+              <strong>{evaluationLabel(evaluation)}</strong>
+            </div>
+          </div>
+        </main>
 
         <aside className="panel">
-          <h2>Coach Panel</h2>
+          <section className="control-block">
+            <div className="panel-heading">
+              <h2>Game Controls</h2>
+              <span className={aiStatus?.model_loaded ? "engine-ok" : "engine-idle"}>
+                {aiStatus?.model_loaded ? "Model ready" : "Status unknown"}
+              </span>
+            </div>
 
-          <label htmlFor="difficulty">Difficulty</label>
-          <select
-            id="difficulty"
-            value={difficulty}
-            onChange={(e) => setDifficulty(e.target.value)}
-            disabled={isBusy}
-          >
-            <option value="easy">Easy</option>
-            <option value="medium">Medium</option>
-            <option value="hard">Hard</option>
-          </select>
+            <div className="segmented" aria-label="Difficulty">
+              {["easy", "medium", "hard"].map((level) => (
+                <button
+                  key={level}
+                  type="button"
+                  className={difficulty === level ? "active" : ""}
+                  onClick={() => setDifficulty(level)}
+                  disabled={isBusy}
+                >
+                  {level}
+                </button>
+              ))}
+            </div>
 
-          <button type="button" onClick={askAiMove} disabled={isBusy}>
-            {isAiThinking ? "AI Thinking..." : "Ask AI Move"}
-          </button>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={autoReply}
+                onChange={(event) => setAutoReply(event.target.checked)}
+                disabled={isBusy}
+              />
+              <span>AI replies automatically</span>
+            </label>
 
-          <button type="button" onClick={evaluatePosition} disabled={isBusy}>
-            {isEvaluating ? "Evaluating..." : "Evaluate Position"}
-          </button>
+            <div className="button-grid">
+              <button type="button" onClick={() => askAiMove()} disabled={isBusy}>
+                {isAiThinking ? "Thinking..." : "AI Move"}
+              </button>
+              <button type="button" onClick={evaluatePosition} disabled={isBusy}>
+                {isEvaluating ? "Reading..." : "Evaluate"}
+              </button>
+              <button type="button" onClick={getCoachAdvice} disabled={isBusy}>
+                {isCoachThinking ? "Coaching..." : "Coach"}
+              </button>
+              <button type="button" onClick={checkBackendStatus} disabled={isBusy}>
+                {isCheckingStatus ? "Checking..." : "Status"}
+              </button>
+            </div>
 
-          <button type="button" onClick={getCoachAdvice} disabled={isBusy}>
-            {isCoachThinking ? "Coach Thinking..." : "Get Coach Advice"}
-          </button>
+            <button type="button" className="reset-button" onClick={resetGame} disabled={isBusy}>
+              Reset game
+            </button>
+          </section>
 
-          <button type="button" onClick={checkBackendStatus} disabled={isBusy}>
-            {isCheckingStatus ? "Checking..." : "Check Backend Status"}
-          </button>
-
-          <button
-            type="button"
-            className="secondary"
-            onClick={resetGame}
-            disabled={isBusy}
-          >
-            Reset
-          </button>
-
-          <div className="box">
+          <section className="info-block">
             <h3>Status</h3>
             <p>{status}</p>
-          </div>
+          </section>
 
-          <div className="box">
-            <h3>Last AI Move</h3>
-            <p>{lastAiMove || "No AI move yet."}</p>
-          </div>
-
-          <div className="box">
-            <h3>Evaluation</h3>
-            <p>
-              {evaluation === null
-                ? "No evaluation yet."
-                : `${Number(evaluation).toFixed(2)} ${
-                    Math.abs(evaluation) > 20 ? "points" : "score"
-                  }`}
-            </p>
-          </div>
-
-          <div className="box coach-box">
-            <h3>Coach Advice</h3>
+          <section className="info-block coach-block">
+            <h3>Coach</h3>
             <p>{coachMessage}</p>
-          </div>
+          </section>
 
-          <div className="box">
-            <h3>AI Status</h3>
-            {aiStatus ? (
-              <ul className="status-list">
-                <li>
-                  Real AI: {aiStatus.real_ai_available ? "Available" : "Unavailable"}
-                </li>
-                <li>Model loaded: {aiStatus.model_loaded ? "Yes" : "No"}</li>
-                <li>
-                  Real eval:{" "}
-                  {aiStatus.real_eval_available ? "Available" : "Unavailable"}
-                </li>
-                {aiStatus.ai_error ? (
-                  <li className="error-text">{aiStatus.ai_error}</li>
-                ) : null}
-              </ul>
+          <section className="info-block">
+            <h3>Move List</h3>
+            {moveHistory.length ? (
+              <ol className="move-list">
+                {moveHistory.map((move, index) => (
+                  <li key={`${move.uci}-${index}`}>
+                    <span>{move.actor}</span>
+                    <strong>{move.san}</strong>
+                  </li>
+                ))}
+              </ol>
             ) : (
-              <p>Not checked yet.</p>
+              <p>No moves yet.</p>
             )}
-          </div>
+          </section>
 
-          <div className="box">
+          <section className="info-block">
+            <h3>Engine</h3>
+            {aiStatus ? (
+              <dl className="engine-list">
+                <div>
+                  <dt>AI</dt>
+                  <dd>{aiStatus.real_ai_available ? "Available" : "Unavailable"}</dd>
+                </div>
+                <div>
+                  <dt>Model</dt>
+                  <dd>{aiStatus.model_loaded ? "Loaded" : "Not loaded"}</dd>
+                </div>
+                <div>
+                  <dt>Coach</dt>
+                  <dd>{aiStatus.real_coach_available ? "Available" : "Unavailable"}</dd>
+                </div>
+              </dl>
+            ) : (
+              <p>Check status to confirm the model is loaded.</p>
+            )}
+          </section>
+
+          <section className="info-block">
             <h3>FEN</h3>
             <p className="fen">{game.fen()}</p>
-          </div>
+          </section>
         </aside>
       </div>
     </div>
