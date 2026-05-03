@@ -703,16 +703,6 @@ function App() {
             ) : null}
           </section>
 
-          <div className="table-strip">
-            <div>
-              <span>Last AI move</span>
-              <strong>{lastAiMove || "None"}</strong>
-            </div>
-            <div>
-              <span>Position</span>
-              <strong>{evaluationLabel(evaluation)}</strong>
-            </div>
-          </div>
         </main>
 
         <aside className="panel">
@@ -826,10 +816,17 @@ function App() {
             )}
           </section>
 
-          <section className="info-block">
-            <h3>FEN</h3>
-            <p className="fen">{game.fen()}</p>
+          <section className="info-block position-summary">
+            <div>
+              <span>Last AI move</span>
+              <strong>{lastAiMove || "None"}</strong>
+            </div>
+            <div>
+              <span>Position</span>
+              <strong>{evaluationLabel(evaluation)}</strong>
+            </div>
           </section>
+
         </aside>
       </div>
     </div>

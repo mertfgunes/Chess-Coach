@@ -522,7 +522,8 @@ h3 {
   padding: 8px 12px;
 }
 
-.table-strip span {
+.table-strip span,
+.position-summary span {
   color: #65717d;
   display: block;
   font-size: 12px;
@@ -532,7 +533,8 @@ h3 {
   text-transform: uppercase;
 }
 
-.table-strip strong {
+.table-strip strong,
+.position-summary strong {
   display: block;
   font-size: 15px;
   line-height: 1.35;
@@ -619,6 +621,16 @@ button:disabled {
 
 .info-block {
   margin-top: 12px;
+}
+
+.position-summary {
+  display: grid;
+  gap: 12px;
+}
+
+.position-summary > div + div {
+  border-top: 1px solid #eef1f3;
+  padding-top: 12px;
 }
 
 .coach-block {
