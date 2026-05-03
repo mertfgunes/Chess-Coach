@@ -86,7 +86,7 @@ function App() {
   }, [game, selectedSquare]);
 
   useEffect(() => {
-    checkBackendStatus({ quiet: true });
+    refreshBackendStatus({ quiet: true });
   }, []);
 
   function updateAiStatus(data) {
@@ -299,16 +299,16 @@ function App() {
     }
   }
 
-  async function checkBackendStatus(options = {}) {
-    if (isBusy) return;
-
+  async function refreshBackendStatus(options = {}) {
     setIsCheckingStatus(true);
     if (!options.quiet) {
       setStatus("Checking engine status...");
     }
 
     try {
-      const response = await fetch(`${API_URL}/status`);
+      const response = await fetch(`${API_URL}/status`, {
+        cache: "no-store",
+      });
       const data = await response.json();
 
       setAiStatus(data);
@@ -322,6 +322,11 @@ function App() {
     } finally {
       setIsCheckingStatus(false);
     }
+  }
+
+  async function checkBackendStatus() {
+    if (isBusy) return;
+    await refreshBackendStatus();
   }
 
   function resetGame() {
