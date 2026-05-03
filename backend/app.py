@@ -70,6 +70,7 @@ def predict():
     data = get_json_data()
     fen = data.get("fen")
     difficulty = data.get("difficulty", "medium")
+    include_solution = bool(data.get("includeSolution", False))
 
     board, error_response = board_from_fen(fen)
     if error_response:
@@ -165,13 +166,14 @@ def coach():
     data = get_json_data()
     fen = data.get("fen")
     difficulty = data.get("difficulty", "medium")
+    include_solution = bool(data.get("includeSolution", False))
 
     board, error_response = board_from_fen(fen)
     if error_response:
         return error_response
 
     try:
-        advice = get_coach_advice(board, difficulty)
+        advice = get_coach_advice(board, difficulty, include_solution=include_solution)
     except Exception as e:
         traceback.print_exc()
         return jsonify({

@@ -513,14 +513,19 @@ def build_coach_points(
     return points[:5]
 
 
-def build_coach_title(board: chess.Board, evaluation: float, suggested_move_san: Optional[str]) -> str:
+def build_coach_title(
+    board: chess.Board,
+    evaluation: float,
+    suggested_move_san: Optional[str],
+    include_solution: bool = False,
+) -> str:
     if board.is_checkmate():
         return "Checkmate on the board"
     if board.is_check():
         return "Answer the check"
-    if suggested_move_san:
+    if include_solution and suggested_move_san:
         return f"Best practical idea: {suggested_move_san}"
-    return evaluation_summary(evaluation)
+    return "Coach lesson"
 
 
 def get_game_over_advice(board: chess.Board) -> Dict[str, Any]:
@@ -608,7 +613,11 @@ def get_game_over_advice(board: chess.Board) -> Dict[str, Any]:
     }
 
 
-def get_coach_advice(board: chess.Board, difficulty: str = "medium") -> Dict[str, Any]:
+def get_coach_advice(
+    board: chess.Board,
+    difficulty: str = "medium",
+    include_solution: bool = False,
+) -> Dict[str, Any]:
     """
     Gives web-friendly coach advice.
     Uses real coach service if possible, otherwise gives simple advice.
@@ -617,19 +626,23 @@ def get_coach_advice(board: chess.Board, difficulty: str = "medium") -> Dict[str
         return get_game_over_advice(board)
 
     evaluation = get_position_evaluation(board)
-    suggested_move = get_ai_move(board, difficulty)
-    suggested_move_uci = suggested_move.uci() if suggested_move else None
-    suggested_move_san = move_to_safe_san(board, suggested_move)
+    suggested_move = None
+    suggested_move_uci = None
+    suggested_move_san = None
 
-    # Try your real ChessCoachService if available
-    coach = get_coach_service()
-    model, vocab = get_model_and_vocab()
+    coach = get_coach_service() if include_solution else None
+    model, vocab = get_model_and_vocab() if include_solution else (None, None)
 
     real_summary = None
     real_explanation = None
     analysis = None
 
-    if coach is not None:
+    if include_solution:
+        suggested_move = get_ai_move(board, difficulty)
+        suggested_move_uci = suggested_move.uci() if suggested_move else None
+        suggested_move_san = move_to_safe_san(board, suggested_move)
+
+    if include_solution and coach is not None:
         try:
             analysis = coach.analyze_position(board, model, vocab)
 
@@ -665,7 +678,7 @@ def get_coach_advice(board: chess.Board, difficulty: str = "medium") -> Dict[str
         message_parts.append(real_explanation)
 
     coach_points = build_coach_points(board, analysis, suggested_move, suggested_move_san)
-    coach_title = build_coach_title(board, evaluation, suggested_move_san)
+    coach_title = build_coach_title(board, evaluation, suggested_move_san, include_solution)
     coach_themes = build_coach_themes(board, analysis, suggested_move)
     training_prompt = build_training_prompt(
         board,

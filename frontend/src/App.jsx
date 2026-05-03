@@ -55,6 +55,14 @@ function evaluationLabel(evaluation) {
   return "The position is close to equal.";
 }
 
+function getGameResult(finalGame) {
+  if (!finalGame?.isGameOver?.()) return "*";
+  if (finalGame.isCheckmate()) {
+    return finalGame.turn() === "w" ? "0-1" : "1-0";
+  }
+  return "1/2-1/2";
+}
+
 function App() {
   const [game, setGame] = useState(() => new Chess());
   const [selectedSquare, setSelectedSquare] = useState(null);
@@ -78,7 +86,7 @@ function App() {
   const [aiStatus, setAiStatus] = useState(null);
   const [autoReply, setAutoReply] = useState(true);
   const [endGameModal, setEndGameModal] = useState(null);
-  const [coachMode, setCoachMode] = useState("explain");
+  const [reportedGameFen, setReportedGameFen] = useState(null);
   const [showTrainingAnswer, setShowTrainingAnswer] = useState(false);
   const [lessonMemory, setLessonMemory] = useState({});
 
@@ -102,6 +110,13 @@ function App() {
     getCoachAdvice(game, { allowBusy: true, quiet: true });
   }, []);
 
+  useEffect(() => {
+    if (game.isGameOver() && reportedGameFen !== game.fen()) {
+      setEndGameModal(buildEndGameModalData(game, {}, moveHistory));
+      setReportedGameFen(game.fen());
+    }
+  }, [game, reportedGameFen, moveHistory]);
+
   function updateAiStatus(data) {
     if (data?.ai_status) {
       setAiStatus(data.ai_status);
@@ -117,6 +132,14 @@ function App() {
         uci: move.uci || move.move,
       },
     ]);
+  }
+
+  function moveRecord(actor, move) {
+    return {
+      actor,
+      san: move.san || move.move_san || move.uci || move.move,
+      uci: move.uci || move.move,
+    };
   }
 
   function applyCoachData(data) {
@@ -147,8 +170,58 @@ function App() {
     }
   }
 
-  function buildEndGameModalData(finalGame, data = {}) {
-    const result = finalGame.result();
+  async function revealCoachAnswer() {
+    await getCoachAdvice(game, {
+      allowBusy: true,
+      includeSolution: true,
+      keepAnswerOpen: true,
+    });
+  }
+
+  function buildPostGameReport(finalGame, data = {}, history = moveHistory) {
+    const safeHistory = Array.isArray(history) ? history : [];
+    const userMoves = safeHistory.filter((move) => move.actor === "You");
+    const aiMoves = safeHistory.filter((move) => move.actor === "AI");
+    const themes = Array.isArray(data.coach_themes) ? data.coach_themes : [];
+    const memoryEntries = Object.entries(lessonMemory);
+    const topTheme =
+      themes[0] ||
+      memoryEntries.sort((a, b) => b[1] - a[1])[0]?.[0] ||
+      "safe improvement";
+
+    let phaseSummary = "The game ended before a long strategic pattern developed.";
+    if (safeHistory.length >= 20) {
+      phaseSummary = "This game reached a longer middlegame, so repeated plans and piece safety mattered most.";
+    } else if (safeHistory.length >= 8) {
+      phaseSummary = "This was mostly an opening-to-early-middlegame game, where development and loose pieces mattered most.";
+    }
+
+    let practiceFocus = "Before every move, check forcing moves, captures, and loose pieces.";
+    if (topTheme.includes("exchange")) {
+      practiceFocus = "Practice calculating the full capture and recapture sequence before taking material.";
+    } else if (topTheme.includes("king")) {
+      practiceFocus = "Practice asking whose king is less safe before choosing checks or pawn moves.";
+    } else if (topTheme.includes("center")) {
+      practiceFocus = "Practice taking central space only after checking that no piece becomes loose.";
+    } else if (topTheme.includes("development")) {
+      practiceFocus = "Practice developing the least active piece before moving the same piece again.";
+    } else if (topTheme.includes("loose")) {
+      practiceFocus = "Practice scanning for undefended pieces after every move.";
+    }
+
+    return {
+      movesPlayed: safeHistory.length,
+      userMoves: userMoves.length,
+      aiMoves: aiMoves.length,
+      phaseSummary,
+      mainLesson: topTheme,
+      finalMoment: data.coach_title || (finalGame.isDraw() ? "The game ended drawn." : "The final position decided the game."),
+      practiceFocus,
+    };
+  }
+
+  function buildEndGameModalData(finalGame, data = {}, history = moveHistory) {
+    const result = getGameResult(finalGame);
     let heading = "Game over";
     let tone = "draw";
 
@@ -169,7 +242,18 @@ function App() {
       summary: data.coach_summary || data.message || "The game has ended.",
       explanation: data.coach_explanation || "",
       points: Array.isArray(data.coach_points) ? data.coach_points : [],
+      report: buildPostGameReport(finalGame, data, history),
     };
+  }
+
+  function showGameOverReport(finalGame, history = moveHistory, data = {}) {
+    setReportedGameFen(finalGame.fen());
+    setEndGameModal(buildEndGameModalData(finalGame, data, history));
+    getCoachAdvice(finalGame, {
+      allowBusy: true,
+      finalGame: true,
+      history,
+    });
   }
 
   function handleSquareClick(square) {
@@ -182,6 +266,7 @@ function App() {
 
     if (gameCopy.isGameOver()) {
       setStatus("Game is over. Reset to start a new one.");
+      showGameOverReport(gameCopy);
       return;
     }
 
@@ -215,15 +300,23 @@ function App() {
       return;
     }
 
+    const legalMove = gameCopy
+      .moves({ square: selectedSquare, verbose: true })
+      .find((candidate) => candidate.to === square);
+
+    if (!legalMove) {
+      setSelectedSquare(null);
+      setStatus("That move is not legal.");
+      return;
+    }
+
     let move = null;
     try {
-      move = gameCopy.move({
-        from: selectedSquare,
-        to: square,
-        promotion: "q",
-      });
+      move = gameCopy.move(legalMove);
     } catch {
-      move = null;
+      setSelectedSquare(null);
+      setStatus("That move is not legal.");
+      return;
     }
 
     if (move === null) {
@@ -232,35 +325,38 @@ function App() {
       return;
     }
 
+    const playerMove = moveRecord("You", move);
+    const nextMoveHistory = [...moveHistory, playerMove];
+
     setGame(gameCopy);
     setSelectedSquare(null);
     setLastMove({ from: move.from, to: move.to });
     setLastAiMove(null);
-    appendMove("You", move);
+    setMoveHistory(nextMoveHistory);
 
     if (gameCopy.isGameOver()) {
-      setStatus(`You played ${move.san}. Game over: ${gameCopy.result()}`);
-      setEndGameModal(buildEndGameModalData(gameCopy));
-      getCoachAdvice(gameCopy, { allowBusy: true, finalGame: true });
+      setStatus(`You played ${move.san}. Game over: ${getGameResult(gameCopy)}`);
+      showGameOverReport(gameCopy, nextMoveHistory);
       return;
     }
 
     setStatus(autoReply ? `You played ${move.san}. AI is thinking.` : `You played ${move.san}.`);
 
     if (autoReply) {
-      askAiMove(gameCopy);
+      askAiMove(gameCopy, nextMoveHistory);
     } else {
       getCoachAdvice(gameCopy, { allowBusy: true, quiet: true });
     }
   }
 
-  async function askAiMove(sourceGame = game) {
+  async function askAiMove(sourceGame = game, sourceHistory = moveHistory) {
     if (isBusy && sourceGame === game) {
       return;
     }
 
     if (sourceGame.isGameOver()) {
       setStatus("Game is already over. Reset to start again.");
+      showGameOverReport(sourceGame, sourceHistory);
       return;
     }
 
@@ -289,10 +385,18 @@ function App() {
 
       if (data.game_over && !data.move) {
         setStatus(`Game over: ${data.result}`);
+        const finalGame = data.fen_after ? new Chess(data.fen_after) : sourceGame;
+        showGameOverReport(finalGame, sourceHistory, data);
         return;
       }
 
       const gameCopy = new Chess(data.fen_after);
+      const aiMoveRecord = moveRecord("AI", {
+        san: data.move_san || data.move,
+        uci: data.move,
+      });
+      const nextMoveHistory = [...sourceHistory, aiMoveRecord];
+
       setGame(gameCopy);
       setSelectedSquare(null);
       setLastAiMove(data.move_san || data.move);
@@ -300,15 +404,13 @@ function App() {
         from: data.move?.slice(0, 2),
         to: data.move?.slice(2, 4),
       });
-      appendMove("AI", {
-        san: data.move_san || data.move,
-        uci: data.move,
-      });
+      setMoveHistory(nextMoveHistory);
 
       if (data.game_over) {
         setStatus(`AI played ${data.move_san || data.move}. Game over: ${data.result}`);
         applyCoachData(data);
-        setEndGameModal(buildEndGameModalData(gameCopy, data));
+        setReportedGameFen(gameCopy.fen());
+        setEndGameModal(buildEndGameModalData(gameCopy, data, nextMoveHistory));
       } else {
         setStatus(`AI played ${data.move_san || data.move}. Your move.`);
         getCoachAdvice(gameCopy, { allowBusy: true, quiet: true });
@@ -371,6 +473,7 @@ function App() {
         body: JSON.stringify({
           fen: sourceGame.fen(),
           difficulty,
+          includeSolution: Boolean(options.includeSolution),
         }),
       });
 
@@ -384,7 +487,11 @@ function App() {
 
       applyCoachData(data);
       if (options.finalGame && sourceGame.isGameOver()) {
-        setEndGameModal(buildEndGameModalData(sourceGame, data));
+        setReportedGameFen(sourceGame.fen());
+        setEndGameModal(buildEndGameModalData(sourceGame, data, options.history));
+      }
+      if (options.keepAnswerOpen) {
+        setShowTrainingAnswer(true);
       }
       if (!options.quiet) {
         setStatus(options.finalGame ? "Final explanation ready." : "Coach advice updated.");
@@ -426,8 +533,8 @@ function App() {
     await refreshBackendStatus();
   }
 
-  function resetGame() {
-    if (isBusy) {
+  function resetGame(force = false) {
+    if (isBusy && !force) {
       setStatus("Let the current action finish first.");
       return;
     }
@@ -449,6 +556,7 @@ function App() {
     setLastMove(null);
     setMoveHistory([]);
     setEndGameModal(null);
+    setReportedGameFen(null);
     setShowTrainingAnswer(false);
     setLessonMemory({});
   }
@@ -515,11 +623,29 @@ function App() {
                 ))}
               </ul>
             ) : null}
+            {endGameModal.report ? (
+            <div className="postgame-report">
+              <h3>Post-game report</h3>
+              <div className="report-grid">
+                <div>
+                  <span>Moves</span>
+                  <strong>{endGameModal.report.movesPlayed}</strong>
+                </div>
+                <div>
+                  <span>Main lesson</span>
+                  <strong>{endGameModal.report.mainLesson}</strong>
+                </div>
+              </div>
+              <p>{endGameModal.report.phaseSummary}</p>
+              <p><strong>Final moment:</strong> {endGameModal.report.finalMoment}</p>
+              <p><strong>Practice next:</strong> {endGameModal.report.practiceFocus}</p>
+            </div>
+            ) : null}
             <div className="endgame-actions">
               <button type="button" onClick={() => setEndGameModal(null)}>
                 Review board
               </button>
-              <button type="button" onClick={resetGame}>
+              <button type="button" onClick={() => resetGame(true)}>
                 New game
               </button>
             </div>
@@ -548,24 +674,19 @@ function App() {
               <span>Coach</span>
               <small>{isCoachThinking ? "Updating..." : "Updates automatically"}</small>
             </div>
-            <div className="coach-mode-tabs">
-              <button
-                type="button"
-                className={coachMode === "explain" ? "active" : ""}
-                onClick={() => setCoachMode("explain")}
-              >
-                Explain
-              </button>
-              <button
-                type="button"
-                className={coachMode === "train" ? "active" : ""}
-                onClick={() => setCoachMode("train")}
-              >
-                Train me
-              </button>
-            </div>
             <h2>{coachInsight.title}</h2>
-            {coachMode === "train" && coachInsight.training ? (
+            <p>{coachInsight.summary}</p>
+            {coachInsight.explanation ? (
+              <p className="coach-explanation">{coachInsight.explanation}</p>
+            ) : null}
+            {coachInsight.points.length ? (
+              <ul className="coach-points">
+                {coachInsight.points.map((point) => (
+                  <li key={point}>{point}</li>
+                ))}
+              </ul>
+            ) : null}
+            {coachInsight.training ? (
               <div className="training-card">
                 <span>{coachInsight.training.theme}</span>
                 <p>{coachInsight.training.question}</p>
@@ -574,26 +695,12 @@ function App() {
                 {showTrainingAnswer ? (
                   <strong>{coachInsight.training.answer}</strong>
                 ) : (
-                  <button type="button" onClick={() => setShowTrainingAnswer(true)}>
-                    Reveal answer
+                  <button type="button" onClick={revealCoachAnswer} disabled={isCoachThinking}>
+                    {isCoachThinking ? "Calculating..." : "Reveal best move"}
                   </button>
                 )}
               </div>
-            ) : (
-              <>
-                <p>{coachInsight.summary}</p>
-                {coachInsight.explanation ? (
-                  <p className="coach-explanation">{coachInsight.explanation}</p>
-                ) : null}
-                {coachInsight.points.length ? (
-                  <ul className="coach-points">
-                    {coachInsight.points.map((point) => (
-                      <li key={point}>{point}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </>
-            )}
+            ) : null}
           </section>
 
           <div className="table-strip">
