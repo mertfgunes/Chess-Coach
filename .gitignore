@@ -11,5 +11,7 @@ __pycache__/
 
 *.pt
 *.pth
+!checkpoints/
+!checkpoints/best_model.pt
 
 /engines/
