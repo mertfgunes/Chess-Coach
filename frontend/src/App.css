@@ -21,7 +21,8 @@ input {
   padding: 24px;
 }
 
-.endgame-backdrop {
+.endgame-backdrop,
+.promotion-backdrop {
   position: fixed;
   inset: 0;
   z-index: 20;
@@ -29,6 +30,10 @@ input {
   place-items: center;
   padding: 18px;
   background: rgba(13, 18, 22, 0.58);
+}
+
+.promotion-backdrop {
+  z-index: 30;
 }
 
 .endgame-modal {
@@ -41,6 +46,86 @@ input {
   border-radius: 8px;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3);
   padding: 22px;
+}
+
+.promotion-modal {
+  width: min(420px, 100%);
+  border: 1px solid #d5dce1;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3);
+  padding: 20px;
+}
+
+.promotion-modal > span {
+  color: #2f6f73;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.promotion-modal h2 {
+  margin-top: 8px;
+  color: #10171d;
+  font-size: 24px;
+  line-height: 1.15;
+}
+
+.promotion-options {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.promotion-options button {
+  display: grid;
+  place-items: center;
+  min-height: 92px;
+  border: 1px solid #dfe5e9;
+  border-radius: 8px;
+  background: #f8fafb;
+  color: #10171d;
+  cursor: pointer;
+  padding: 10px 6px;
+}
+
+.promotion-options button:hover {
+  border-color: #2f6f73;
+  background: #edf6f2;
+}
+
+.promotion-options strong {
+  font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", serif;
+  font-size: 40px;
+  line-height: 1;
+  color: #fffdf4;
+  text-shadow:
+    0 2px 1px rgba(0, 0, 0, 0.65),
+    0 0 1px #202020;
+}
+
+.promotion-options small {
+  color: #3e4a54;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.promotion-cancel {
+  width: 100%;
+  margin-top: 12px;
+  border: 1px solid #dfe5e9;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #26323c;
+  cursor: pointer;
+  font-weight: 800;
+  padding: 10px;
+}
+
+.promotion-cancel:hover {
+  background: #f3f5f6;
 }
 
 .endgame-modal.loss {

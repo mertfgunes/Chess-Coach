@@ -29,6 +29,12 @@ const difficultyCopy = {
 };
 
 const captureOrder = ["q", "r", "b", "n", "p"];
+const promotionChoices = [
+  { type: "q", label: "Queen" },
+  { type: "r", label: "Rook" },
+  { type: "b", label: "Bishop" },
+  { type: "n", label: "Knight" },
+];
 
 function formatEvaluation(evaluation) {
   if (evaluation === null || Number.isNaN(Number(evaluation))) {
@@ -95,6 +101,7 @@ function App() {
   const [autoReply, setAutoReply] = useState(true);
   const [endGameModal, setEndGameModal] = useState(null);
   const [reportedGameFen, setReportedGameFen] = useState(null);
+  const [pendingPromotion, setPendingPromotion] = useState(null);
   const [showTrainingAnswer, setShowTrainingAnswer] = useState(false);
   const [lessonMemory, setLessonMemory] = useState({});
 
@@ -294,9 +301,73 @@ function App() {
     });
   }
 
+  function commitPlayerMove(gameCopy, move) {
+    const playerMove = moveRecord("You", move);
+    const nextMoveHistory = [...moveHistory, playerMove];
+
+    setGame(gameCopy);
+    setSelectedSquare(null);
+    setPendingPromotion(null);
+    setLastMove({ from: move.from, to: move.to });
+    setLastAiMove(null);
+    setMoveHistory(nextMoveHistory);
+
+    if (gameCopy.isGameOver()) {
+      setStatus(`You played ${move.san}. Game over: ${getGameResult(gameCopy)}`);
+      showGameOverReport(gameCopy, nextMoveHistory);
+      return;
+    }
+
+    setStatus(autoReply ? `You played ${move.san}. AI is thinking.` : `You played ${move.san}.`);
+
+    if (autoReply) {
+      askAiMove(gameCopy, nextMoveHistory);
+    } else {
+      getCoachAdvice(gameCopy, { allowBusy: true, quiet: true });
+    }
+  }
+
+  function choosePromotion(promotion) {
+    if (!pendingPromotion) return;
+
+    const gameCopy = new Chess(game.fen());
+    const legalMove = gameCopy
+      .moves({ square: pendingPromotion.from, verbose: true })
+      .find(
+        (candidate) =>
+          candidate.to === pendingPromotion.to && candidate.promotion === promotion
+      );
+
+    if (!legalMove) {
+      setPendingPromotion(null);
+      setStatus("That promotion is not legal in this position.");
+      return;
+    }
+
+    let move = null;
+    try {
+      move = gameCopy.move(legalMove);
+    } catch {
+      move = null;
+    }
+
+    if (!move) {
+      setPendingPromotion(null);
+      setStatus("That promotion is not legal in this position.");
+      return;
+    }
+
+    commitPlayerMove(gameCopy, move);
+  }
+
   function handleSquareClick(square) {
     if (isBusy) {
       setStatus("Let the current analysis finish first.");
+      return;
+    }
+
+    if (pendingPromotion) {
+      setStatus("Choose a promotion piece first.");
       return;
     }
 
@@ -338,13 +409,26 @@ function App() {
       return;
     }
 
-    const legalMove = gameCopy
+    const legalMoves = gameCopy
       .moves({ square: selectedSquare, verbose: true })
-      .find((candidate) => candidate.to === square);
+      .filter((candidate) => candidate.to === square);
+    const promotionMoves = legalMoves.filter((candidate) => candidate.promotion);
+    const legalMove = promotionMoves[0] || legalMoves[0];
 
     if (!legalMove) {
       setSelectedSquare(null);
       setStatus("That move is not legal.");
+      return;
+    }
+
+    if (promotionMoves.length > 1) {
+      setPendingPromotion({
+        from: selectedSquare,
+        to: square,
+        choices: promotionMoves.map((candidate) => candidate.promotion),
+      });
+      setSelectedSquare(null);
+      setStatus("Choose what your pawn promotes to.");
       return;
     }
 
@@ -363,28 +447,7 @@ function App() {
       return;
     }
 
-    const playerMove = moveRecord("You", move);
-    const nextMoveHistory = [...moveHistory, playerMove];
-
-    setGame(gameCopy);
-    setSelectedSquare(null);
-    setLastMove({ from: move.from, to: move.to });
-    setLastAiMove(null);
-    setMoveHistory(nextMoveHistory);
-
-    if (gameCopy.isGameOver()) {
-      setStatus(`You played ${move.san}. Game over: ${getGameResult(gameCopy)}`);
-      showGameOverReport(gameCopy, nextMoveHistory);
-      return;
-    }
-
-    setStatus(autoReply ? `You played ${move.san}. AI is thinking.` : `You played ${move.san}.`);
-
-    if (autoReply) {
-      askAiMove(gameCopy, nextMoveHistory);
-    } else {
-      getCoachAdvice(gameCopy, { allowBusy: true, quiet: true });
-    }
+    commitPlayerMove(gameCopy, move);
   }
 
   async function askAiMove(sourceGame = game, sourceHistory = moveHistory) {
@@ -609,6 +672,7 @@ function App() {
     setMoveHistory([]);
     setEndGameModal(null);
     setReportedGameFen(null);
+    setPendingPromotion(null);
     setShowTrainingAnswer(false);
     setLessonMemory({});
   }
@@ -720,6 +784,38 @@ function App() {
                 New game
               </button>
             </div>
+          </section>
+        </div>
+      ) : null}
+      {pendingPromotion ? (
+        <div className="promotion-backdrop" role="dialog" aria-modal="true">
+          <section className="promotion-modal">
+            <span>Pawn promotion</span>
+            <h2>Choose your new piece</h2>
+            <div className="promotion-options">
+              {promotionChoices
+                .filter((choice) => pendingPromotion.choices.includes(choice.type))
+                .map((choice) => (
+                  <button
+                    key={choice.type}
+                    type="button"
+                    onClick={() => choosePromotion(choice.type)}
+                  >
+                    <strong>{pieceSymbols[choice.type.toUpperCase()]}</strong>
+                    <small>{choice.label}</small>
+                  </button>
+                ))}
+            </div>
+            <button
+              type="button"
+              className="promotion-cancel"
+              onClick={() => {
+                setPendingPromotion(null);
+                setStatus("Promotion cancelled.");
+              }}
+            >
+              Cancel
+            </button>
           </section>
         </div>
       ) : null}
