@@ -222,6 +222,63 @@ def fallback_positional_bonus(board_before: chess.Board, board_after: chess.Boar
     return bonus
 
 
+def fallback_move_score(board: chess.Board, move: chess.Move) -> int:
+    board_copy = board.copy(stack=False)
+    board_copy.push(move)
+
+    score = fallback_material_evaluation(board_copy)
+
+    # If White is choosing, higher is better.
+    # If Black is choosing, lower is better.
+    adjusted_score = score if board.turn == chess.WHITE else -score
+
+    if board.is_capture(move):
+        adjusted_score += static_exchange_evaluation(board, move) * 90
+
+    hanging_value = hanging_material_after_move(board, move)
+    adjusted_score -= hanging_value * 120
+
+    if board.gives_check(move):
+        adjusted_score += 5
+
+    adjusted_score += fallback_positional_bonus(board, board_copy, move)
+    return adjusted_score
+
+
+def tactical_override_move(board: chess.Board, candidate: chess.Move) -> Optional[chess.Move]:
+    """
+    Let the model guide play, but do not let it miss a clearly profitable capture.
+    This is intentionally narrow so the model still gets ordinary positional choices.
+    """
+    best_capture = None
+    best_capture_score = None
+
+    for move in board.legal_moves:
+        if not board.is_capture(move):
+            continue
+
+        target = board.piece_at(move.to_square)
+        captured_value = PIECE_VALUES_CP.get(target.piece_type, 0) if target else 100
+        see_gain = static_exchange_evaluation(board, move)
+
+        if captured_value < PIECE_VALUES_CP[chess.KNIGHT] or see_gain < 0:
+            continue
+
+        move_score = fallback_move_score(board, move)
+        if best_capture_score is None or move_score > best_capture_score:
+            best_capture = move
+            best_capture_score = move_score
+
+    if best_capture is None or best_capture == candidate:
+        return None
+
+    candidate_score = fallback_move_score(board, candidate)
+    if best_capture_score is not None and best_capture_score >= candidate_score + 180:
+        return best_capture
+
+    return None
+
+
 def get_position_evaluation(board: chess.Board) -> float:
     """
     Uses your real coach_evaluation.py if possible.
@@ -260,25 +317,7 @@ def fallback_ai_move(board: chess.Board, difficulty: str = "medium") -> Optional
     best_score = None
 
     for move in legal_moves:
-        board_copy = board.copy(stack=False)
-        board_copy.push(move)
-
-        score = fallback_material_evaluation(board_copy)
-
-        # If White is choosing, higher is better.
-        # If Black is choosing, lower is better.
-        adjusted_score = score if board.turn == chess.WHITE else -score
-
-        if board.is_capture(move):
-            adjusted_score += static_exchange_evaluation(board, move) * 90
-
-        hanging_value = hanging_material_after_move(board, move)
-        adjusted_score -= hanging_value * 120
-
-        if board.gives_check(move):
-            adjusted_score += 5
-
-        adjusted_score += fallback_positional_bonus(board, board_copy, move)
+        adjusted_score = fallback_move_score(board, move)
 
         if best_score is None or adjusted_score > best_score:
             best_score = adjusted_score
@@ -305,6 +344,9 @@ def get_ai_move(board: chess.Board, difficulty: str = "medium") -> Optional[ches
                 move = chess.Move.from_uci(move)
 
             if isinstance(move, chess.Move) and move in board.legal_moves:
+                tactical_move = tactical_override_move(board, move)
+                if tactical_move is not None:
+                    return tactical_move
                 return move
 
             print(f"[Web AI] Real AI returned invalid/illegal move: {move}")
