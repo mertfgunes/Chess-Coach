@@ -156,6 +156,72 @@ def fallback_material_evaluation(board: chess.Board) -> int:
     return score
 
 
+def fallback_positional_bonus(board_before: chess.Board, board_after: chess.Board, move: chess.Move) -> int:
+    """
+    Small centipawn-style guide for the fallback engine when the trained model is unavailable.
+    It keeps quiet opening moves from collapsing to the first legal move in python-chess order.
+    """
+    mover = board_before.turn
+    piece = board_before.piece_at(move.from_square)
+
+    if piece is None:
+        return 0
+
+    bonus = 0
+    own_back_rank = chess.BB_RANK_1 if mover == chess.WHITE else chess.BB_RANK_8
+    center_squares = {chess.D4, chess.E4, chess.D5, chess.E5}
+    extended_center = {
+        chess.C3, chess.D3, chess.E3, chess.F3,
+        chess.C4, chess.F4, chess.C5, chess.F5,
+        chess.C6, chess.D6, chess.E6, chess.F6,
+    }
+
+    if move.to_square in center_squares:
+        bonus += 35
+    elif move.to_square in extended_center:
+        bonus += 15
+
+    if board_before.is_castling(move):
+        bonus += 70
+
+    if piece.piece_type in (chess.KNIGHT, chess.BISHOP):
+        if chess.BB_SQUARES[move.from_square] & own_back_rank:
+            bonus += 45
+        if move.to_square in center_squares or move.to_square in extended_center:
+            bonus += 12
+
+    if piece.piece_type == chess.PAWN:
+        from_rank = chess.square_rank(move.from_square)
+        to_rank = chess.square_rank(move.to_square)
+        home_rank = 1 if mover == chess.WHITE else 6
+        direction = 1 if mover == chess.WHITE else -1
+
+        if from_rank == home_rank and to_rank == home_rank + 2 * direction:
+            if chess.square_file(move.from_square) in (3, 4):
+                bonus += 45
+            elif chess.square_file(move.from_square) in (2, 5):
+                bonus += 20
+
+        if move.to_square in center_squares:
+            bonus += 15
+
+    if piece.piece_type == chess.QUEEN and board_before.fullmove_number <= 8:
+        bonus -= 25
+
+    if piece.piece_type == chess.KING and not board_before.is_castling(move):
+        bonus -= 35
+
+    attacked_center = sum(
+        1 for square in center_squares if board_after.is_attacked_by(mover, square)
+    )
+    bonus += attacked_center * 4
+
+    legal_reply_count = board_after.legal_moves.count()
+    bonus -= min(legal_reply_count, 40)
+
+    return bonus
+
+
 def get_position_evaluation(board: chess.Board) -> float:
     """
     Uses your real coach_evaluation.py if possible.
@@ -211,6 +277,8 @@ def fallback_ai_move(board: chess.Board, difficulty: str = "medium") -> Optional
 
         if board.gives_check(move):
             adjusted_score += 5
+
+        adjusted_score += fallback_positional_bonus(board, board_copy, move)
 
         if best_score is None or adjusted_score > best_score:
             best_score = adjusted_score

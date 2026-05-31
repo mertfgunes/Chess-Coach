@@ -1066,11 +1066,6 @@ function App() {
           </section>
 
           <section className="info-block">
-            <h3>Status</h3>
-            <p>{status}</p>
-          </section>
-
-          <section className="info-block">
             <h3>Move List</h3>
             {moveHistory.length ? (
               <ol className="move-list">
