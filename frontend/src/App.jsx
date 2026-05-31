@@ -36,6 +36,14 @@ const promotionChoices = [
   { type: "n", label: "Knight" },
 ];
 
+const oppositeColor = (color) => (color === "w" ? "b" : "w");
+const colorName = (color) => (color === "w" ? "White" : "Black");
+
+function uciFromMove(move) {
+  if (!move) return "";
+  return move.uci || move.move || `${move.from || ""}${move.to || ""}${move.promotion || ""}`;
+}
+
 function formatEvaluation(evaluation) {
   if (evaluation === null || Number.isNaN(Number(evaluation))) {
     return "No eval";
@@ -77,10 +85,35 @@ function getCapturedPieceSymbol(piece) {
   return pieceSymbols[symbolKey] || "";
 }
 
+function getEngineBadge(aiStatus, isCheckingStatus) {
+  if (isCheckingStatus) {
+    return { className: "engine-idle", label: "Checking engine" };
+  }
+
+  if (aiStatus?.backend_reachable === false) {
+    return { className: "engine-error", label: "Backend offline" };
+  }
+
+  if (!aiStatus) {
+    return { className: "engine-idle", label: "Checking engine" };
+  }
+
+  if (aiStatus.model_loaded) {
+    return { className: "engine-ok", label: "Model ready" };
+  }
+
+  if (!aiStatus.real_ai_available) {
+    return { className: "engine-error", label: "AI unavailable" };
+  }
+
+  return { className: "engine-idle", label: "Model not loaded" };
+}
+
 function App() {
   const [game, setGame] = useState(() => new Chess());
   const [selectedSquare, setSelectedSquare] = useState(null);
-  const [status, setStatus] = useState("White to move.");
+  const [status, setStatus] = useState("Choose a side to start.");
+  const [playerColor, setPlayerColor] = useState(null);
   const [difficulty, setDifficulty] = useState("hard");
   const [evaluation, setEvaluation] = useState(null);
   const [coachMessage, setCoachMessage] = useState(
@@ -112,6 +145,10 @@ function App() {
 
   const isBusy =
     isAiThinking || isEvaluating || isCoachThinking || isCheckingStatus;
+  const engineBadge = getEngineBadge(aiStatus, isCheckingStatus);
+  const aiColor = playerColor ? oppositeColor(playerColor) : null;
+  const boardFiles = playerColor === "b" ? [...files].reverse() : files;
+  const boardRanks = playerColor === "b" ? [...ranks].reverse() : ranks;
 
   const legalTargets = useMemo(() => {
     if (!selectedSquare) return new Set();
@@ -155,7 +192,7 @@ function App() {
 
   function updateAiStatus(data) {
     if (data?.ai_status) {
-      setAiStatus(data.ai_status);
+      setAiStatus({ backend_reachable: true, ...data.ai_status });
     }
   }
 
@@ -165,7 +202,7 @@ function App() {
       {
         actor,
         san: move.san || move.move_san || move.uci || move.move,
-        uci: move.uci || move.move,
+        uci: uciFromMove(move),
       },
     ]);
   }
@@ -177,7 +214,7 @@ function App() {
     return {
       actor,
       san: move.san || move.move_san || move.uci || move.move,
-      uci: move.uci || move.move,
+      uci: uciFromMove(move),
       captured: move.captured
         ? {
             color: capturedColor || (actor === "You" ? "b" : "w"),
@@ -271,9 +308,10 @@ function App() {
     let tone = "draw";
 
     if (finalGame.isCheckmate()) {
-      const winner = finalGame.turn() === "w" ? "Black" : "White";
-      heading = winner === "White" ? "You won by checkmate" : "You lost by checkmate";
-      tone = winner === "White" ? "win" : "loss";
+      const winnerColor = finalGame.turn() === "w" ? "b" : "w";
+      const playerWon = playerColor ? winnerColor === playerColor : winnerColor === "w";
+      heading = playerWon ? "You won by checkmate" : "You lost by checkmate";
+      tone = playerWon ? "win" : "loss";
     } else if (finalGame.isDraw()) {
       heading = "Draw";
       tone = "draw";
@@ -366,6 +404,11 @@ function App() {
       return;
     }
 
+    if (!playerColor) {
+      setStatus("Choose White or Black to start.");
+      return;
+    }
+
     if (pendingPromotion) {
       setStatus("Choose a promotion piece first.");
       return;
@@ -379,15 +422,15 @@ function App() {
       return;
     }
 
-    if (gameCopy.turn() !== "w") {
-      setStatus("Black is the AI side. Ask for the AI move.");
+    if (gameCopy.turn() !== playerColor) {
+      setStatus(`${colorName(aiColor)} is the AI side. Ask for the AI move.`);
       return;
     }
 
     if (!selectedSquare) {
       const piece = gameCopy.get(square);
-      if (!piece || piece.color !== "w") {
-        setStatus("Choose one of your white pieces.");
+      if (!piece || piece.color !== playerColor) {
+        setStatus(`Choose one of your ${colorName(playerColor).toLowerCase()} pieces.`);
         return;
       }
 
@@ -403,7 +446,7 @@ function App() {
     }
 
     const targetPiece = gameCopy.get(square);
-    if (targetPiece?.color === "w") {
+    if (targetPiece?.color === playerColor) {
       setSelectedSquare(square);
       setStatus(`Selected ${square}.`);
       return;
@@ -450,8 +493,22 @@ function App() {
     commitPlayerMove(gameCopy, move);
   }
 
-  async function askAiMove(sourceGame = game, sourceHistory = moveHistory) {
+  async function askAiMove(
+    sourceGame = game,
+    sourceHistory = moveHistory,
+    sourcePlayerColor = playerColor
+  ) {
     if (isBusy && sourceGame === game) {
+      return;
+    }
+
+    if (!sourcePlayerColor) {
+      setStatus("Choose White or Black to start.");
+      return;
+    }
+
+    if (sourceGame.turn() === sourcePlayerColor) {
+      setStatus("It is your move.");
       return;
     }
 
@@ -612,7 +669,9 @@ function App() {
         setStatus(options.finalGame ? "Final explanation ready." : "Coach advice updated.");
       }
     } catch {
-      setStatus("Backend is not reachable. Start the Flask server first.");
+      if (!options.quiet) {
+        setStatus("Backend is not reachable. Start the Flask server first.");
+      }
     } finally {
       setIsCoachThinking(false);
     }
@@ -630,11 +689,12 @@ function App() {
       });
       const data = await response.json();
 
-      setAiStatus(data);
+      setAiStatus({ backend_reachable: true, ...data });
       if (!options.quiet) {
         setStatus("Engine status updated.");
       }
     } catch {
+      setAiStatus({ backend_reachable: false });
       if (!options.quiet) {
         setStatus("Backend is not reachable.");
       }
@@ -643,20 +703,11 @@ function App() {
     }
   }
 
-  async function checkBackendStatus() {
-    if (isBusy) return;
-    await refreshBackendStatus();
-  }
-
-  function resetGame(force = false) {
-    if (isBusy && !force) {
-      setStatus("Let the current action finish first.");
-      return;
-    }
-
-    setGame(new Chess());
+  function clearGameState(nextGame = new Chess(), nextPlayerColor = null) {
+    setGame(nextGame);
+    setPlayerColor(nextPlayerColor);
     setSelectedSquare(null);
-    setStatus("New game started. White to move.");
+    setStatus(nextPlayerColor ? `New game started. ${colorName(nextGame.turn())} to move.` : "Choose a side to start.");
     setEvaluation(null);
     setCoachMessage("Play a move, then ask for advice when you want a coaching note.");
     setCoachInsight({
@@ -677,9 +728,77 @@ function App() {
     setLessonMemory({});
   }
 
+  function startGame(color) {
+    const nextGame = new Chess();
+    clearGameState(nextGame, color);
+
+    if (color === "b") {
+      setStatus("You are Black. White AI is making the first move.");
+      askAiMove(nextGame, [], color);
+    } else {
+      setStatus("You are White. Your move.");
+      getCoachAdvice(nextGame, { allowBusy: true, quiet: true });
+    }
+  }
+
+  function resetGame(force = false) {
+    if (isBusy && !force) {
+      setStatus("Let the current action finish first.");
+      return;
+    }
+
+    clearGameState();
+  }
+
+  function rebuildGameFromHistory(history) {
+    const rebuilt = new Chess();
+    history.forEach((move) => {
+      if (!move.uci) return;
+      rebuilt.move({
+        from: move.uci.slice(0, 2),
+        to: move.uci.slice(2, 4),
+        promotion: move.uci.slice(4, 5) || "q",
+      });
+    });
+    return rebuilt;
+  }
+
+  function undoMove() {
+    if (isBusy) {
+      setStatus("Let the current action finish first.");
+      return;
+    }
+
+    if (!moveHistory.length) {
+      setStatus("No moves to undo yet.");
+      return;
+    }
+
+    let removeCount = 1;
+    if (moveHistory.at(-1)?.actor === "AI" && moveHistory.at(-2)?.actor === "You") {
+      removeCount = 2;
+    }
+
+    const nextHistory = moveHistory.slice(0, Math.max(0, moveHistory.length - removeCount));
+    const rebuilt = rebuildGameFromHistory(nextHistory);
+    const previousMove = nextHistory.at(-1);
+
+    setGame(rebuilt);
+    setSelectedSquare(null);
+    setPendingPromotion(null);
+    setMoveHistory(nextHistory);
+    setLastAiMove(previousMove?.actor === "AI" ? previousMove.san : null);
+    setLastMove(previousMove?.uci ? { from: previousMove.uci.slice(0, 2), to: previousMove.uci.slice(2, 4) } : null);
+    setEndGameModal(null);
+    setReportedGameFen(null);
+    setEvaluation(null);
+    setStatus(`Undid ${removeCount === 2 ? "your move and the AI reply" : "the last move"}. ${colorName(rebuilt.turn())} to move.`);
+    getCoachAdvice(rebuilt, { allowBusy: true, quiet: true });
+  }
+
   function renderBoard() {
-    return ranks.map((rank, rankIndex) =>
-      files.map((file, fileIndex) => {
+    return boardRanks.map((rank, rankIndex) =>
+      boardFiles.map((file, fileIndex) => {
         const square = `${file}${rank}`;
         const piece = game.get(square);
         const isLight = (rankIndex + fileIndex) % 2 === 0;
@@ -733,11 +852,12 @@ function App() {
   }
 
   function getGameStateText() {
+    if (!playerColor) return "Choose side";
     if (game.isCheckmate()) return "Checkmate";
     if (game.isStalemate()) return "Stalemate";
     if (game.isDraw()) return "Draw";
     if (game.inCheck()) return `${game.turn() === "w" ? "White" : "Black"} in check`;
-    return game.turn() === "w" ? "White to move" : "AI to move";
+    return game.turn() === playerColor ? "Your move" : "AI to move";
   }
 
   return (
@@ -819,12 +939,32 @@ function App() {
           </section>
         </div>
       ) : null}
+      {!playerColor ? (
+        <div className="side-choice-backdrop" role="dialog" aria-modal="true">
+          <section className="side-choice-modal">
+            <span>New game</span>
+            <h2>Choose your side</h2>
+            <div className="side-choice-actions">
+              <button type="button" onClick={() => startGame("w")}>
+                Play White
+              </button>
+              <button type="button" onClick={() => startGame("b")}>
+                Play Black
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
       <div className="shell">
         <main className="play-area">
           <div className="topbar">
             <div>
               <h1>Chess Coach</h1>
-              <p className="subtitle">Play White against the trained AI.</p>
+              <p className="subtitle">
+                {playerColor
+                  ? `Play ${colorName(playerColor)} against the trained AI.`
+                  : "Choose a side to start against the trained AI."}
+              </p>
             </div>
             <div className="state-stack">
               <span className="state-pill">{isBusy ? "Thinking" : getGameStateText()}</span>
@@ -836,7 +976,7 @@ function App() {
             <div className="board-layout">
               {renderCapturedTray("White took", capturedPieces.white, "white-captures")}
               <div className="custom-board">{renderBoard()}</div>
-              {renderCapturedTray("AI took", capturedPieces.black, "black-captures")}
+              {renderCapturedTray("Black took", capturedPieces.black, "black-captures")}
             </div>
           </div>
 
@@ -880,8 +1020,8 @@ function App() {
           <section className="control-block">
             <div className="panel-heading">
               <h2>Game Controls</h2>
-              <span className={aiStatus?.model_loaded ? "engine-ok" : "engine-idle"}>
-                {aiStatus?.model_loaded ? "Model ready" : "Status unknown"}
+              <span className={engineBadge.className}>
+                {engineBadge.label}
               </span>
             </div>
 
@@ -916,8 +1056,8 @@ function App() {
               <button type="button" onClick={evaluatePosition} disabled={isBusy}>
                 {isEvaluating ? "Reading..." : "Evaluate"}
               </button>
-              <button type="button" onClick={checkBackendStatus} disabled={isBusy}>
-                {isCheckingStatus ? "Checking..." : "Status"}
+              <button type="button" onClick={undoMove} disabled={isBusy || !moveHistory.length}>
+                Undo
               </button>
               <button type="button" onClick={resetGame} disabled={isBusy}>
                 Reset game

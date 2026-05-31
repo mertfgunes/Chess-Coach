@@ -22,7 +22,8 @@ input {
 }
 
 .endgame-backdrop,
-.promotion-backdrop {
+.promotion-backdrop,
+.side-choice-backdrop {
   position: fixed;
   inset: 0;
   z-index: 20;
@@ -34,6 +35,10 @@ input {
 
 .promotion-backdrop {
   z-index: 30;
+}
+
+.side-choice-backdrop {
+  z-index: 40;
 }
 
 .endgame-modal {
@@ -55,6 +60,54 @@ input {
   background: #ffffff;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3);
   padding: 20px;
+}
+
+.side-choice-modal {
+  width: min(420px, 100%);
+  border: 1px solid #d5dce1;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.3);
+  padding: 22px;
+}
+
+.side-choice-modal > span {
+  color: #2f6f73;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.side-choice-modal h2 {
+  margin: 8px 0 18px;
+  color: #10171d;
+  font-size: 28px;
+  line-height: 1.15;
+}
+
+.side-choice-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.side-choice-actions button {
+  min-height: 54px;
+  border: 0;
+  border-radius: 6px;
+  background: #26323c;
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.side-choice-actions button:last-child {
+  background: #2f6f73;
+}
+
+.side-choice-actions button:hover {
+  filter: brightness(0.92);
 }
 
 .promotion-modal > span {
