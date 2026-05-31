@@ -464,6 +464,22 @@ def difficulty_settings(difficulty: str | None) -> dict[str, float | int | bool]
     }
 
 
+def apply_opening_variety(
+    board: chess.Board,
+    settings: dict[str, float | int | bool],
+) -> dict[str, float | int | bool]:
+    """
+    Let the AI choose among similarly valued opening moves, while still keeping
+    deterministic precision once a move is clearly stronger.
+    """
+    if board.fullmove_number > 7:
+        return settings
+
+    varied = dict(settings)
+    varied["top_k"] = max(int(varied["top_k"]), 4)
+    return varied
+
+
 # ---------------------------------------------------------------------------
 # Main move prediction
 # ---------------------------------------------------------------------------
@@ -488,7 +504,7 @@ def predict_legal_move(
     if not legal_moves:
         raise ValueError("No legal moves available.")
 
-    settings = difficulty_settings(difficulty)
+    settings = apply_opening_variety(board, difficulty_settings(difficulty))
     if top_k == TOP_K:
         top_k = int(settings["top_k"])
     if temperature == TEMPERATURE:
@@ -527,6 +543,15 @@ def predict_legal_move(
 
     best_score = candidates[0][1]
     second_score = candidates[1][1]
+
+    if board.fullmove_number <= 7:
+        close_candidates = [
+            move
+            for move, score in candidates
+            if best_score - score <= 0.12
+        ]
+        if len(close_candidates) > 1:
+            return random.choice(close_candidates)
 
     # If the best move is clearly better, play it.
     if best_score - second_score >= 0.85:

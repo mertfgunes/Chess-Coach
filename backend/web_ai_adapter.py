@@ -313,15 +313,23 @@ def fallback_ai_move(board: chess.Board, difficulty: str = "medium") -> Optional
     if difficulty == "easy":
         return random.choice(legal_moves)
 
-    best_move = None
-    best_score = None
+    scored_moves = []
 
     for move in legal_moves:
         adjusted_score = fallback_move_score(board, move)
+        scored_moves.append((move, adjusted_score))
 
-        if best_score is None or adjusted_score > best_score:
-            best_score = adjusted_score
-            best_move = move
+    scored_moves.sort(key=lambda item: item[1], reverse=True)
+    best_move, best_score = scored_moves[0]
+
+    if board.fullmove_number <= 7:
+        close_moves = [
+            move
+            for move, score in scored_moves[:6]
+            if best_score - score <= 15
+        ]
+        if len(close_moves) > 1:
+            return random.choice(close_moves)
 
     if difficulty == "medium" and random.random() < 0.20:
         return random.choice(legal_moves)

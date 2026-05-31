@@ -3,6 +3,7 @@ import { Chess } from "chess.js";
 import "./App.css";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:5000";
+const SAVED_GAME_KEY = "chess-coach.saved-game.v1";
 
 const pieceSymbols = {
   p: "\u265F",
@@ -38,6 +39,69 @@ const promotionChoices = [
 
 const oppositeColor = (color) => (color === "w" ? "b" : "w");
 const colorName = (color) => (color === "w" ? "White" : "Black");
+
+function loadSavedGameState() {
+  if (typeof window === "undefined") return null;
+
+  try {
+    const raw = window.localStorage.getItem(SAVED_GAME_KEY);
+    if (!raw) return null;
+
+    const saved = JSON.parse(raw);
+    const restoredGame = new Chess(saved.fen);
+    const history = Array.isArray(saved.moveHistory) ? saved.moveHistory : [];
+
+    return {
+      game: restoredGame,
+      playerColor: saved.playerColor === "b" ? "b" : saved.playerColor === "w" ? "w" : null,
+      difficulty: ["easy", "medium", "hard"].includes(saved.difficulty) ? saved.difficulty : "hard",
+      autoReply: typeof saved.autoReply === "boolean" ? saved.autoReply : true,
+      evaluation: saved.evaluation ?? null,
+      coachMessage: saved.coachMessage || "Play a move, then ask for advice when you want a coaching note.",
+      coachInsight: saved.coachInsight || {
+        title: "Coach Insight",
+        summary: "Ask the coach for a focused plan in the current position.",
+        explanation: "",
+        points: ["Look for forcing moves, loose pieces, and king safety."],
+        themes: [],
+        training: null,
+      },
+      lastAiMove: saved.lastAiMove || null,
+      lastMove: saved.lastMove || null,
+      moveHistory: history,
+      lessonMemory: saved.lessonMemory || {},
+    };
+  } catch {
+    window.localStorage.removeItem(SAVED_GAME_KEY);
+    return null;
+  }
+}
+
+function saveGameState(state) {
+  if (typeof window === "undefined") return;
+
+  if (!state.playerColor) {
+    window.localStorage.removeItem(SAVED_GAME_KEY);
+    return;
+  }
+
+  window.localStorage.setItem(
+    SAVED_GAME_KEY,
+    JSON.stringify({
+      fen: state.game.fen(),
+      playerColor: state.playerColor,
+      difficulty: state.difficulty,
+      autoReply: state.autoReply,
+      evaluation: state.evaluation,
+      coachMessage: state.coachMessage,
+      coachInsight: state.coachInsight,
+      lastAiMove: state.lastAiMove,
+      lastMove: state.lastMove,
+      moveHistory: state.moveHistory,
+      lessonMemory: state.lessonMemory,
+    })
+  );
+}
 
 function uciFromMove(move) {
   if (!move) return "";
@@ -110,16 +174,21 @@ function getEngineBadge(aiStatus, isCheckingStatus) {
 }
 
 function App() {
-  const [game, setGame] = useState(() => new Chess());
+  const [savedGame] = useState(() => loadSavedGameState());
+  const [game, setGame] = useState(() => savedGame?.game || new Chess());
   const [selectedSquare, setSelectedSquare] = useState(null);
-  const [status, setStatus] = useState("Choose a side to start.");
-  const [playerColor, setPlayerColor] = useState(null);
-  const [difficulty, setDifficulty] = useState("hard");
-  const [evaluation, setEvaluation] = useState(null);
-  const [coachMessage, setCoachMessage] = useState(
-    "Play a move, then ask for advice when you want a coaching note."
+  const [status, setStatus] = useState(
+    savedGame?.playerColor
+      ? `Game restored. ${colorName(savedGame.game.turn())} to move.`
+      : "Choose a side to start."
   );
-  const [coachInsight, setCoachInsight] = useState({
+  const [playerColor, setPlayerColor] = useState(savedGame?.playerColor || null);
+  const [difficulty, setDifficulty] = useState(savedGame?.difficulty || "hard");
+  const [evaluation, setEvaluation] = useState(savedGame?.evaluation ?? null);
+  const [coachMessage, setCoachMessage] = useState(
+    savedGame?.coachMessage || "Play a move, then ask for advice when you want a coaching note."
+  );
+  const [coachInsight, setCoachInsight] = useState(savedGame?.coachInsight || {
     title: "Coach Insight",
     summary: "Ask the coach for a focused plan in the current position.",
     explanation: "",
@@ -127,16 +196,16 @@ function App() {
     themes: [],
     training: null,
   });
-  const [lastAiMove, setLastAiMove] = useState(null);
-  const [lastMove, setLastMove] = useState(null);
-  const [moveHistory, setMoveHistory] = useState([]);
+  const [lastAiMove, setLastAiMove] = useState(savedGame?.lastAiMove || null);
+  const [lastMove, setLastMove] = useState(savedGame?.lastMove || null);
+  const [moveHistory, setMoveHistory] = useState(savedGame?.moveHistory || []);
   const [aiStatus, setAiStatus] = useState(null);
-  const [autoReply, setAutoReply] = useState(true);
+  const [autoReply, setAutoReply] = useState(savedGame?.autoReply ?? true);
   const [endGameModal, setEndGameModal] = useState(null);
   const [reportedGameFen, setReportedGameFen] = useState(null);
   const [pendingPromotion, setPendingPromotion] = useState(null);
   const [showTrainingAnswer, setShowTrainingAnswer] = useState(false);
-  const [lessonMemory, setLessonMemory] = useState({});
+  const [lessonMemory, setLessonMemory] = useState(savedGame?.lessonMemory || {});
 
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [isEvaluating, setIsEvaluating] = useState(false);
@@ -182,6 +251,34 @@ function App() {
     refreshBackendStatus({ quiet: true });
     getCoachAdvice(game, { allowBusy: true, quiet: true });
   }, []);
+
+  useEffect(() => {
+    saveGameState({
+      game,
+      playerColor,
+      difficulty,
+      autoReply,
+      evaluation,
+      coachMessage,
+      coachInsight,
+      lastAiMove,
+      lastMove,
+      moveHistory,
+      lessonMemory,
+    });
+  }, [
+    game,
+    playerColor,
+    difficulty,
+    autoReply,
+    evaluation,
+    coachMessage,
+    coachInsight,
+    lastAiMove,
+    lastMove,
+    moveHistory,
+    lessonMemory,
+  ]);
 
   useEffect(() => {
     if (game.isGameOver() && reportedGameFen !== game.fen()) {
