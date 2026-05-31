@@ -48,8 +48,15 @@ except Exception as e:
     print(f"[Web AI] Could not import real AI: {e}")
 
 try:
-    from coach_tactics import hanging_material_after_move, static_exchange_evaluation
+    from coach_tactics import (
+        hanging_material_after_move,
+        immediate_material_threat,
+        static_exchange_evaluation,
+    )
 except Exception:
+    def immediate_material_threat(board: chess.Board, color: chess.Color) -> int:
+        return 0
+
     def hanging_material_after_move(board: chess.Board, move: chess.Move) -> int:
         return 0
 
@@ -279,6 +286,53 @@ def tactical_override_move(board: chess.Board, candidate: chess.Move) -> Optiona
     return None
 
 
+def immediate_blunder_loss(board: chess.Board, move: chess.Move) -> int:
+    if move not in board.legal_moves:
+        return PIECE_VALUES_CP[chess.QUEEN] // 100
+
+    if board.is_capture(move):
+        see = static_exchange_evaluation(board, move)
+        if see < 0:
+            return abs(see)
+
+    mover = board.turn
+    existing_threat = immediate_material_threat(board, mover)
+    new_hanging = hanging_material_after_move(board, move)
+
+    board_after = board.copy(stack=False)
+    board_after.push(move)
+
+    if board_after.is_checkmate():
+        return 0
+
+    remaining_threat = immediate_material_threat(board_after, mover)
+    unresolved_threat = remaining_threat if remaining_threat >= existing_threat else 0
+
+    return max(new_hanging, unresolved_threat)
+
+
+def is_candidate_blunder(board: chess.Board, move: chess.Move) -> bool:
+    loss = immediate_blunder_loss(board, move)
+
+    if loss < PIECE_VALUES_CP[chess.BISHOP] // 100:
+        return False
+
+    return True
+
+
+def filter_blunder_candidates(
+    board: chess.Board,
+    scored_moves: list[tuple[chess.Move, float]],
+) -> list[tuple[chess.Move, float]]:
+    safe_moves = [
+        (move, score)
+        for move, score in scored_moves
+        if not is_candidate_blunder(board, move)
+    ]
+
+    return safe_moves or scored_moves
+
+
 def get_position_evaluation(board: chess.Board) -> float:
     """
     Uses your real coach_evaluation.py if possible.
@@ -320,6 +374,7 @@ def fallback_ai_move(board: chess.Board, difficulty: str = "medium") -> Optional
         scored_moves.append((move, adjusted_score))
 
     scored_moves.sort(key=lambda item: item[1], reverse=True)
+    scored_moves = filter_blunder_candidates(board, scored_moves)
     best_move, best_score = scored_moves[0]
 
     if board.fullmove_number <= 7:

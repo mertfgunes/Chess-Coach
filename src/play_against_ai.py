@@ -10,6 +10,7 @@ import torch.nn as nn
 
 from coach_evaluation import evaluate_position
 from coach_tactics import (
+    immediate_material_threat,
     hanging_material_after_move,
     static_exchange_evaluation,
 )
@@ -184,6 +185,59 @@ def _move_safety_adjustment(board: chess.Board, move: chess.Move) -> float:
             adjustment -= 0.25
 
     return adjustment
+
+
+def immediate_blunder_loss(board: chess.Board, move: chess.Move) -> int:
+    """
+    Pawn-unit estimate of material the opponent can win right after this move.
+
+    This is intentionally a blunt final gate, not a full engine. It catches the
+    expensive one-ply mistakes that make the bot drop bishops, rooks, or queens.
+    """
+    if move not in board.legal_moves:
+        return PIECE_VALUES[chess.QUEEN]
+
+    if board.is_capture(move):
+        see = static_exchange_evaluation(board, move)
+        if see < 0:
+            return abs(see)
+
+    mover = board.turn
+    existing_threat = immediate_material_threat(board, mover)
+    new_hanging = hanging_material_after_move(board, move)
+
+    board_after = board.copy(stack=False)
+    board_after.push(move)
+
+    if board_after.is_checkmate():
+        return 0
+
+    remaining_threat = immediate_material_threat(board_after, mover)
+    unresolved_threat = remaining_threat if remaining_threat >= existing_threat else 0
+
+    return max(new_hanging, unresolved_threat)
+
+
+def is_candidate_blunder(board: chess.Board, move: chess.Move) -> bool:
+    loss = immediate_blunder_loss(board, move)
+
+    if loss < PIECE_VALUES[chess.BISHOP]:
+        return False
+
+    return True
+
+
+def filter_blunder_candidates(
+    board: chess.Board,
+    scored_moves: list[tuple[chess.Move, float]],
+) -> list[tuple[chess.Move, float]]:
+    safe_moves = [
+        (move, score)
+        for move, score in scored_moves
+        if not is_candidate_blunder(board, move)
+    ]
+
+    return safe_moves or scored_moves
 
 
 def opening_move_bonus(board: chess.Board, move: chess.Move) -> float:
@@ -530,6 +584,7 @@ def predict_legal_move(
         reranked.append((move, final_score))
 
     reranked.sort(key=lambda item: item[1], reverse=True)
+    reranked = filter_blunder_candidates(board, reranked)
 
     if random.random() < float(settings["random_chance"]):
         weaker_pool = reranked[: max(1, min(6, len(reranked)))]
